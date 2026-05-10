@@ -1,7 +1,18 @@
-PM="apt"
+pm () {
+    if command -v apt >/dev/null 2>&1; then
+        apt "$@"
+        elif command -v dnf >/dev/null 2>&1; then
+        dnf "$@"
+        elif command -v yum >/dev/null 2>&1; then
+        yum "$@"
+    else
+        echo "No supported package manager found" >&2
+        return 1
+    fi
+}
 
 update_server () {
-    sudo $PM update && sudo $PM upgrade
+    sudo pm update && sudo pm upgrade
 }
 
 get_ip() {
@@ -52,8 +63,9 @@ get_private_ip() {
 }
 
 
-main() {
-    update_server
+require_root() {
+    if [ "$(id -u)" != "0" ]; then
+        echo "This script must be run as root" >&2
+        exit 1
+    fi
 }
-
-main()

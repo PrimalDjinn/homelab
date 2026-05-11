@@ -44,7 +44,12 @@ add_host() {
     local name
     
     ip="$(get_ip)"
-    name="$(hostname)"
+
+    if [[ -z "$SERVER_HOST" ]]; then
+        name="$(hostname)-server"
+    else
+        name=$SERVER_HOST
+    fi
     
     echo "$ip $name" >> "$HOSTS_FILE"
 }
@@ -60,6 +65,10 @@ prepare() {
 }
 
 restore_host() {
+    if [[ ! -f "$HOSTS_FILE.bak" ]]; then
+        echo "No backup file was found"
+        return 1    
+    fi
     cp $HOSTS_FILE.bak $HOSTS_FILE
 }
 

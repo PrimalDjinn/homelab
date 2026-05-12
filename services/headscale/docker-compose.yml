@@ -1,0 +1,72 @@
+services:
+  config-init:
+    build:
+      context: ./init
+      dockerfile: Dockerfile
+    container_name: headplane_config_init
+    networks:
+      - headplane-net
+    volumes:
+      - ./headplane_config.yml:/app/headplane_config.yml:ro
+      - ./headscale_config.yml:/app/headscale_config.yml:ro
+      - shared-configs:/shared
+    env_file:
+      - .env
+
+  headscale:
+    image: headscale/headscale:${HEADSCALE_VERSION:-0.28.0}
+    container_name: headscale
+    restart: unless-stopped
+    networks:
+      - headplane-net
+    depends_on:
+      config-init:
+        condition: service_completed_successfully
+    command: serve -c /shared/headscale_config.yaml
+    ports:
+      - "8080:8080"
+      - "127.0.0.1:9090:9090"
+    volumes:
+      - shared-configs:/shared
+      - ./dns_records.json:/etc/headscale/dns_records.json
+      - headscale-storage:/var/lib/headscale
+    env_file:
+      - .env
+    environment:
+      HEADSCALE_CONFIG: /shared/headscale_config.yaml
+    healthcheck:
+      test: ["CMD", "headscale", "-c", "/shared/headscale_config.yaml", "health"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+
+  headplane:
+    image: ghcr.io/tale/headplane:${HEADPLANE_VERSION:-latest}
+    container_name: headplane
+    restart: unless-stopped
+    networks:
+      - headplane-net
+    depends_on:
+      config-init:
+        condition: service_completed_successfully
+      headscale:
+        condition: service_healthy
+    ports:
+      - "3000:3000"
+    volumes:
+      - shared-configs:/shared
+      - headplane-storage:/var/lib/headplane
+      - ./dns_records.json:/etc/headscale/dns_records.json
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    environment:
+      HEADPLANE_CONFIG_PATH: /shared/headplane_config.yaml
+      HEADPLANE_LOAD_ENV_OVERRIDES: "true"
+
+networks:
+  headplane-net:
+    driver: bridge
+
+volumes:
+  headplane-storage:
+  headscale-storage:
+  shared-configs:

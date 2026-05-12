@@ -1,0 +1,12 @@
+{
+  "groups": {
+    "group:admins": ["admin"],
+  },
+  "acls": [
+    {
+      "action": "accept",
+      "src": ["*"],
+      "dst": ["*:*"],
+    },
+  ],
+}

@@ -1,0 +1,8 @@
+services:
+  authelia:
+    image: authelia/authelia:${AUTHELIA_VERSION:-latest}
+    restart: unless-stopped
+    ports:
+      - "9091:9091"
+    volumes:
+      - ./config:/config

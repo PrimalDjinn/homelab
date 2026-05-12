@@ -17,6 +17,7 @@ if [[ "${1:-}" == "--all" ]]; then
 	sleep 10
 	bash "$SCRIPT_DIR/setup-server.sh"
 	bash "$SCRIPT_DIR/setup-subnet.sh"
+	bash "$SCRIPT_DIR/setup-lxcs.sh"
 else
 	issue_warning
 fi

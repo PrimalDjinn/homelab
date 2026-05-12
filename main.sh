@@ -1,14 +1,17 @@
-#/usr/bin/env bash
-SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+#!/usr/bin/env bash
+set -euo pipefail
 
-bash "$SCRIPT_DIR/setup-proxmox.sh"
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/utils.sh"
 
 issue_warning() {
 	info "Proxmox setup complete; rerun with --all to setup the server"
 	warn "Make sure you have an SSH key and have it set up, that setup step will disable ssh password access"
 }
 
-if [[ "$1" === '--all' ]]; then
+bash "$SCRIPT_DIR/setup-proxmox.sh"
+
+if [[ "${1:-}" == "--all" ]]; then
 	issue_warning
 	info "Press Ctrl+C now to cancel it"
 	sleep 10
@@ -16,4 +19,4 @@ if [[ "$1" === '--all' ]]; then
 	bash "$SCRIPT_DIR/setup-subnet.sh"
 else
 	issue_warning
-if
+fi

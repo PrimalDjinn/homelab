@@ -8,8 +8,11 @@ set -e
 echo "[+] Backing up /etc/network/interfaces"
 cp /etc/network/interfaces /etc/network/interfaces.bak.$(date +%F-%H-%M)
 
-echo "[+] Adding vmbr10 (Network)"
-cat <<EOF >>/etc/network/interfaces
+if grep -qE '^iface[[:space:]]+vmbr10[[:space:]]+' /etc/network/interfaces; then
+    echo "[+] vmbr10 already exists in /etc/network/interfaces; skipping bridge append"
+else
+    echo "[+] Adding vmbr10 (Network)"
+    cat <<EOF >>/etc/network/interfaces
 
 # === Internal Network ===
 auto vmbr10
@@ -19,6 +22,7 @@ iface vmbr10 inet static
     bridge_stp off
     bridge_fd 0
 EOF
+fi
 
 echo "[+] Reloading network..."
 ifdown vmbr10 2>/dev/null || true
@@ -38,25 +42,29 @@ echo "[+] Setting up firewall rules"
 MAIN_INTERFACE=$(ip route | grep default | awk '{print $5}' | head -n1)
 echo "[+] Detected main interface: $MAIN_INTERFACE"
 
-# Flush existing FORWARD and NAT rules (optional, comment out if you have custom rules)
-iptables -F FORWARD
-iptables -t nat -F POSTROUTING
+if [ -z "$MAIN_INTERFACE" ]; then
+    echo "Could not detect the default network interface" >&2
+    exit 1
+fi
 
 # === NAT RULES FOR INTERNET ACCESS ===
 # Enable NAT for Dev network (vmbr10) to access internet
-iptables -t nat -A POSTROUTING -s 10.10.10.0/24 -o $MAIN_INTERFACE -j MASQUERADE
+iptables -t nat -C POSTROUTING -s 10.10.10.0/24 -o "$MAIN_INTERFACE" -j MASQUERADE 2>/dev/null || \
+    iptables -t nat -A POSTROUTING -s 10.10.10.0/24 -o "$MAIN_INTERFACE" -j MASQUERADE
 
 # === FORWARD RULES ===
 # Allow internet access from both networks
-iptables -A FORWARD -i vmbr10 -o $MAIN_INTERFACE -j ACCEPT
+iptables -C FORWARD -i vmbr10 -o "$MAIN_INTERFACE" -j ACCEPT 2>/dev/null || \
+    iptables -A FORWARD -i vmbr10 -o "$MAIN_INTERFACE" -j ACCEPT
 
 # Allow return traffic for established connections
-iptables -A FORWARD -m state --state ESTABLISHED,RELATED -j ACCEPT
+iptables -C FORWARD -m state --state ESTABLISHED,RELATED -j ACCEPT 2>/dev/null || \
+    iptables -A FORWARD -m state --state ESTABLISHED,RELATED -j ACCEPT
 
 # Save iptables rules
 echo "[+] Saving iptables rules"
-apt-get update -y && apt-get install -y iptables-persistent
-apt-get install netfilter-persistent -y
+apt-get update -y
+DEBIAN_FRONTEND=noninteractive apt-get install -y iptables-persistent netfilter-persistent
 netfilter-persistent save
 
 ### 4️⃣ DNS CONFIGURATION ###
@@ -108,7 +116,6 @@ systemctl enable pve-firewall --now
 echo ""
 echo "[+] Done! Proxmox is now configured with:"
 echo "    ✅ vmbr10 (Network: 10.10.10.0/24) with internet access"
-echo "    ✅ Controlled routing between networks (Dev can access Staging ports 3000,3306)"
 echo "    ✅ NAT rules for internet connectivity"
 echo "    ✅ Optional DHCP service via dnsmasq"
 echo ""

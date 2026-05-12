@@ -227,8 +227,7 @@ net.ipv4.conf.default.rp_filter = 1
 # Increase system file descriptor limit
 fs.file-max = 65535
 
-# Protect against buffer overflow attacks
-kernel.exec-shield = 1
+# Enable address space layout randomization
 kernel.randomize_va_space = 2
 EOF
 

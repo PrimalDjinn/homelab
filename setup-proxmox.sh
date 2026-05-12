@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+set -euo pipefail
+
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/utils.sh"
 
@@ -45,10 +47,10 @@ add_host() {
     
     ip="$(get_ip)"
     
-    if [[ -z "$SERVER_HOST" ]]; then
+    if [[ -z "${SERVER_HOST:-}" ]]; then
         name="$(hostname)-server"
     else
-        name=$SERVER_HOST
+        name="$SERVER_HOST"
     fi
     
     echo "$ip $name" >> "$HOSTS_FILE"
@@ -69,7 +71,7 @@ restore_host() {
         echo "No backup file was found"
         return 1
     fi
-    cp $HOSTS_FILE.bak $HOSTS_FILE
+    cp "$HOSTS_FILE.bak" "$HOSTS_FILE"
 }
 
 
@@ -84,50 +86,46 @@ fix_proxmox_repos() {
     SOURCES_DIR="/etc/apt/sources.list.d"
     BACKUP_DIR="/root/apt-sources-backup-$(date +%Y%m%d%H%M%S)"
 
-    # ── Backup ────────────────────────────────────────────────────────────────────
     info "Backing up current sources to $BACKUP_DIR"
     mkdir -p "$BACKUP_DIR"
     cp -v "$SOURCES_DIR"/*.list "$SOURCES_DIR"/*.sources "$BACKUP_DIR/" 2>/dev/null || true
 
-    # ── Disable enterprise .list files ───────────────────────────────────────────
     for f in "$SOURCES_DIR/pve-enterprise.list" "$SOURCES_DIR/ceph.list"; do
-    if [[ -f "$f" ]]; then
-        sed -i 's|^deb https://enterprise.proxmox.com|# deb https://enterprise.proxmox.com|g' "$f"
-        info "Commented out enterprise entries in $f"
-    fi
+        if [[ -f "$f" ]]; then
+            sed -i 's|^deb https://enterprise.proxmox.com|# deb https://enterprise.proxmox.com|g' "$f"
+            info "Commented out enterprise entries in $f"
+        fi
     done
 
-    # ── Disable enterprise .sources (DEB822) files ───────────────────────────────
     for f in "$SOURCES_DIR/pve-enterprise.sources" "$SOURCES_DIR/ceph.sources"; do
-    if [[ -f "$f" ]]; then
-        mv "$f" "${f}.disabled"
-        info "Disabled $f → ${f}.disabled"
-    fi
+        if [[ -f "$f" ]]; then
+            mv "$f" "${f}.disabled"
+            info "Disabled $f -> ${f}.disabled"
+        fi
     done
 
-    # ── Enable community .list files ─────────────────────────────────────────────
     if [[ ! -f "$SOURCES_DIR/pve-no-subscription.list" ]]; then
-    echo "deb http://download.proxmox.com/debian/pve trixie pve-no-subscription" \
-        > "$SOURCES_DIR/pve-no-subscription.list"
-    info "Created pve-no-subscription.list"
+        echo "deb http://download.proxmox.com/debian/pve bookworm pve-no-subscription" \
+            > "$SOURCES_DIR/pve-no-subscription.list"
+        info "Created pve-no-subscription.list"
     else
-    info "pve-no-subscription.list already exists, skipping."
+        info "pve-no-subscription.list already exists, skipping."
     fi
 
     if [[ ! -f "$SOURCES_DIR/ceph-no-subscription.list" ]]; then
-    echo "deb http://download.proxmox.com/debian/ceph-squid trixie no-subscription" \
-        > "$SOURCES_DIR/ceph-no-subscription.list"
-    info "Created ceph-no-subscription.list"
+        echo "deb http://download.proxmox.com/debian/ceph-reef bookworm no-subscription" \
+            > "$SOURCES_DIR/ceph-no-subscription.list"
+        info "Created ceph-no-subscription.list"
     else
-    info "ceph-no-subscription.list already exists, skipping."
+        info "ceph-no-subscription.list already exists, skipping."
     fi
 
     info "Checking for any remaining active enterprise entries..."
     REMAINING=$(grep -r "^deb https://enterprise.proxmox.com" /etc/apt/ 2>/dev/null || true)
     if [[ -n "$REMAINING" ]]; then
-    warn "Still found active enterprise entries:\n$REMAINING"
+        warn "Still found active enterprise entries:\n$REMAINING"
     else
-    info "All enterprise entries are disabled."
+        info "All enterprise entries are disabled."
     fi
 
     info "Running apt update..."
@@ -136,18 +134,21 @@ fix_proxmox_repos() {
     info "Done. Backup saved to $BACKUP_DIR"
 }
 
-LOCK_FILE="$(basename "$0").lock"
+STATE_DIR="/var/lib/homelab"
+PENDING_FILE="$STATE_DIR/setup-proxmox.pending"
+DONE_FILE="$STATE_DIR/setup-proxmox.done"
 
 install() {
     # Add the Proxmox VE repository:
     echo "deb [arch=amd64] http://download.proxmox.com/debian/pve bookworm pve-no-subscription" > /etc/apt/sources.list.d/pve-install-repo.list
     wget https://enterprise.proxmox.com/debian/proxmox-release-bookworm.gpg -O /etc/apt/trusted.gpg.d/proxmox-release-bookworm.gpg
     # verify
-    sha512sum /etc/apt/trusted.gpg.d/proxmox-release-bookworm.gpg 7da6fe34168adc6e479327ba517796d4702fa2f8b4f0a9833f5ea6e6b48f6507a6da403a274fe201595edc86a84463d50383d07f64bdde2e3658108db7d6dc87 /etc/apt/trusted.gpg.d/proxmox-release-bookworm.gpg
-    apt update && apt full-upgrade
-    apt install proxmox-default-kernel
+    echo "7da6fe34168adc6e479327ba517796d4702fa2f8b4f0a9833f5ea6e6b48f6507a6da403a274fe201595edc86a84463d50383d07f64bdde2e3658108db7d6dc87  /etc/apt/trusted.gpg.d/proxmox-release-bookworm.gpg" | sha512sum -c -
+    apt update && apt -y full-upgrade
+    apt install -y proxmox-default-kernel
 
-    touch $LOCK_FILE
+    mkdir -p "$STATE_DIR"
+    touch "$PENDING_FILE"
 
     info "Rebooting, rerun the script to complete installation"
     sleep 10
@@ -155,20 +156,29 @@ install() {
 }
 
 complete_install() {
-    apt install proxmox-ve open-iscsi chrony
-    apt remove linux-image-amd64 'linux-image-6.1*'
+    DEBIAN_FRONTEND=noninteractive apt install -y proxmox-ve postfix open-iscsi chrony
+    apt remove -y linux-image-amd64 'linux-image-6.1*'
     update-grub
-    apt remove os-prober
+    apt remove -y os-prober
     free_mail_ports
+    rm -f /etc/apt/sources.list.d/pve-install-repo.list
     fix_proxmox_repos
+    rm -f "$PENDING_FILE"
+    touch "$DONE_FILE"
 }
 
 
-if [[ -f "$LOCK_FILE" ]]; then
-    complete_install
-elif [[ "$1" == "--reset" ]]; then
+if [[ "${1:-}" == "--reset" ]]; then
+    require_root
     restore_host
+    rm -f "$PENDING_FILE" "$DONE_FILE"
+elif [[ -f "$PENDING_FILE" ]]; then
+    require_root
+    complete_install
+elif [[ -f "$DONE_FILE" ]]; then
+    info "Proxmox setup is already marked complete."
 else
     require_root
     prepare
+    install
 fi

@@ -1,23 +1,37 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # Run as root on the Proxmox host
 
-set -e
+set -euo pipefail
+
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+
+if [[ -f "$SCRIPT_DIR/.env" ]]; then
+    # shellcheck disable=SC1090
+    source "$SCRIPT_DIR/.env"
+fi
+
+VM_BRIDGE="${HOMELAB_BRIDGE:-vmbr10}"
+NETWORK_PREFIX="${HOMELAB_NETWORK_PREFIX:-10.10.10}"
+GATEWAY_IP="${HOMELAB_GATEWAY_IP:-$NETWORK_PREFIX.1}"
+DHCP_START="${HOMELAB_DHCP_START:-$NETWORK_PREFIX.100}"
+DHCP_END="${HOMELAB_DHCP_END:-$NETWORK_PREFIX.200}"
+NETWORK_CIDR="${HOMELAB_NETWORK_CIDR:-$NETWORK_PREFIX.0/24}"
 
 ### 1️⃣ CREATE NETWORK BRIDGES ###
 
 echo "[+] Backing up /etc/network/interfaces"
 cp /etc/network/interfaces /etc/network/interfaces.bak.$(date +%F-%H-%M)
 
-if grep -qE '^iface[[:space:]]+vmbr10[[:space:]]+' /etc/network/interfaces; then
-    echo "[+] vmbr10 already exists in /etc/network/interfaces; skipping bridge append"
+if grep -qE "^iface[[:space:]]+$VM_BRIDGE[[:space:]]+" /etc/network/interfaces; then
+    echo "[+] $VM_BRIDGE already exists in /etc/network/interfaces; skipping bridge append"
 else
-    echo "[+] Adding vmbr10 (Network)"
+    echo "[+] Adding $VM_BRIDGE (Network)"
     cat <<EOF >>/etc/network/interfaces
 
 # === Internal Network ===
-auto vmbr10
-iface vmbr10 inet static
-    address 10.10.10.1/24
+auto $VM_BRIDGE
+iface $VM_BRIDGE inet static
+    address $GATEWAY_IP/24
     bridge_ports none
     bridge_stp off
     bridge_fd 0
@@ -25,8 +39,8 @@ EOF
 fi
 
 echo "[+] Reloading network..."
-ifdown vmbr10 2>/dev/null || true
-ifup vmbr10
+ifdown "$VM_BRIDGE" 2>/dev/null || true
+ifup "$VM_BRIDGE"
 
 ### 2️⃣ ENABLE IP FORWARDING ###
 
@@ -49,13 +63,13 @@ fi
 
 # === NAT RULES FOR INTERNET ACCESS ===
 # Enable NAT for Dev network (vmbr10) to access internet
-iptables -t nat -C POSTROUTING -s 10.10.10.0/24 -o "$MAIN_INTERFACE" -j MASQUERADE 2>/dev/null || \
-    iptables -t nat -A POSTROUTING -s 10.10.10.0/24 -o "$MAIN_INTERFACE" -j MASQUERADE
+iptables -t nat -C POSTROUTING -s "$NETWORK_CIDR" -o "$MAIN_INTERFACE" -j MASQUERADE 2>/dev/null || \
+    iptables -t nat -A POSTROUTING -s "$NETWORK_CIDR" -o "$MAIN_INTERFACE" -j MASQUERADE
 
 # === FORWARD RULES ===
 # Allow internet access from both networks
-iptables -C FORWARD -i vmbr10 -o "$MAIN_INTERFACE" -j ACCEPT 2>/dev/null || \
-    iptables -A FORWARD -i vmbr10 -o "$MAIN_INTERFACE" -j ACCEPT
+iptables -C FORWARD -i "$VM_BRIDGE" -o "$MAIN_INTERFACE" -j ACCEPT 2>/dev/null || \
+    iptables -A FORWARD -i "$VM_BRIDGE" -o "$MAIN_INTERFACE" -j ACCEPT
 
 # Allow return traffic for established connections
 iptables -C FORWARD -m state --state ESTABLISHED,RELATED -j ACCEPT 2>/dev/null || \
@@ -75,11 +89,14 @@ apt-get install -y dnsmasq
 
 # Configure dnsmasq for the custom networks
 cat <<EOF >/etc/dnsmasq.d/proxmox-networks.conf
-# DNS for Dev Network
-interface=vmbr10
-dhcp-range=vmbr10,10.10.10.100,10.10.10.200,24h
-dhcp-option=vmbr10,3,10.10.10.1
-dhcp-option=vmbr10,6,8.8.8.8,8.8.4.4
+# DNS and DHCP for Homelab Network
+interface=$VM_BRIDGE
+bind-interfaces
+dhcp-range=$VM_BRIDGE,$DHCP_START,$DHCP_END,24h
+dhcp-option=$VM_BRIDGE,3,$GATEWAY_IP
+dhcp-option=$VM_BRIDGE,6,$GATEWAY_IP
+server=1.1.1.1
+server=1.0.0.1
 EOF
 
 systemctl restart dnsmasq
@@ -90,12 +107,12 @@ systemctl enable dnsmasq
 echo "[+] Network configuration complete!"
 echo ""
 echo "=== NETWORK DETAILS ==="
-echo "Network (vmbr10):"
-echo "  - Network: 10.10.10.0/24"
-echo "  - Gateway: 10.10.10.1"
-echo "  - DNS: 8.8.8.8, 8.8.4.4"
-echo "  - DHCP Range: 10.10.10.100-200 (optional)"
-echo "  - Static IPs: Use 10.10.10.2-99 for manual assignment"
+echo "Network ($VM_BRIDGE):"
+echo "  - Network: $NETWORK_CIDR"
+echo "  - Gateway: $GATEWAY_IP"
+echo "  - DNS: $GATEWAY_IP"
+echo "  - DHCP Range: $DHCP_START-$DHCP_END (optional)"
+echo "  - Static IPs: Use $NETWORK_PREFIX.2-99 for manual assignment"
 echo ""
 echo "=== LXC CONFIGURATION ==="
 echo "For static IP configuration in LXCs, edit /etc/network/interfaces:"
@@ -103,9 +120,9 @@ echo ""
 echo "# Example for Dev LXC (10.10.10.50):"
 echo "auto eth0"
 echo "iface eth0 inet static"
-echo "    address 10.10.10.50/24"
-echo "    gateway 10.10.10.1"
-echo "    dns-nameservers 8.8.8.8 8.8.4.4"
+echo "    address $NETWORK_PREFIX.50/24"
+echo "    gateway $GATEWAY_IP"
+echo "    dns-nameservers $GATEWAY_IP"
 
 ### 6️⃣ ISOLATION BEST PRACTICES ###
 echo ""
@@ -115,7 +132,7 @@ systemctl enable pve-firewall --now
 
 echo ""
 echo "[+] Done! Proxmox is now configured with:"
-echo "    ✅ vmbr10 (Network: 10.10.10.0/24) with internet access"
+echo "    ✅ $VM_BRIDGE (Network: $NETWORK_CIDR) with internet access"
 echo "    ✅ NAT rules for internet connectivity"
 echo "    ✅ Optional DHCP service via dnsmasq"
 echo ""

@@ -153,6 +153,10 @@ ufw allow 22/tcp comment 'SSH'
 # Allow Proxmox Web Interface
 ufw allow 8006/tcp comment 'Proxmox Web UI'
 
+# Allow public web traffic forwarded to Nginx Proxy Manager
+ufw allow 80/tcp comment 'HTTP reverse proxy'
+ufw allow 443/tcp comment 'HTTPS reverse proxy'
+
 # Allow Proxmox clustering (if needed)
 ufw allow 5900:5999/tcp comment 'Proxmox VNC'
 ufw allow 3128/tcp comment 'Proxmox SPICE Proxy'

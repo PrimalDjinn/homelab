@@ -6,12 +6,12 @@ source "$SCRIPT_DIR/utils.sh"
 
 require_root
 
-DOMAIN="${SERVER_HOST:-}"
-if [[ -z "$DOMAIN" && -f "$SCRIPT_DIR/.env" ]]; then
+if [[ -f "$SCRIPT_DIR/.env" ]]; then
     # shellcheck disable=SC1090
     source "$SCRIPT_DIR/.env"
-    DOMAIN="${SERVER_HOST:-}"
 fi
+
+DOMAIN="${SERVER_HOST:-}"
 if [[ -z "$DOMAIN" ]]; then
     error "Set SERVER_HOST to your base domain before provisioning service LXCs."
 fi
@@ -184,7 +184,7 @@ install_proxy_lxc() {
 }
 
 seed_npm_proxy_hosts() {
-    local token payload name host port
+    local token payload name existing
     local ctid="$PROXY_CTID"
 
     info "Trying to seed Nginx Proxy Manager proxy hosts"
@@ -203,6 +203,11 @@ seed_npm_proxy_hosts() {
     python3 "$SERVICES_DIR/proxy/render-npm-hosts.py" --output-dir "$GENERATED_DIR/npm"
     for payload in "$GENERATED_DIR"/npm/*.json; do
         name="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["domain_names"][0])' "$payload")"
+        existing="$(pct_exec "$ctid" "curl -fsS http://127.0.0.1:81/api/nginx/proxy-hosts -H 'Authorization: Bearer $(quote "$token")' | jq -r '.[] | select(.domain_names[]? == $(quote "$name")) | .id' | head -n1" 2>/dev/null || true)"
+        if [[ -n "$existing" ]]; then
+            info "Nginx Proxy Manager proxy host $name already exists; skipping seed"
+            continue
+        fi
         pct push "$ctid" "$payload" "/tmp/$(basename "$payload")"
         pct_exec "$ctid" "curl -fsS -X POST http://127.0.0.1:81/api/nginx/proxy-hosts -H 'Authorization: Bearer $(quote "$token")' -H 'Content-Type: application/json' --data @/tmp/$(basename "$payload") >/dev/null" || \
             warn "Could not seed proxy host $name; it may already exist or NPM may have changed its API."
@@ -342,6 +347,27 @@ configure_host_dnat() {
     fi
 }
 
+configure_internal_dns() {
+    local dnsmasq_file="/etc/dnsmasq.d/homelab-services.conf"
+
+    if ! command -v dnsmasq >/dev/null 2>&1; then
+        warn "dnsmasq is not installed; internal clients may hairpin through the public IP."
+        return
+    fi
+
+    info "Writing split-horizon DNS records for homelab service domains"
+    cat > "$dnsmasq_file" <<EOF
+# Homelab split-horizon records.
+# Internal clients resolve public service names directly to Nginx Proxy Manager.
+address=/$PROXY_DOMAIN/$PROXY_IP
+address=/$AUTH_DOMAIN/$PROXY_IP
+address=/$HEADSCALE_DOMAIN/$PROXY_IP
+address=/$HEADPLANE_DOMAIN/$PROXY_IP
+EOF
+
+    systemctl restart dnsmasq
+}
+
 write_summary() {
     local preauth_key=""
     [[ -s "$SECRETS_DIR/headscale-admin-preauth-key" ]] && preauth_key="$(cat "$SECRETS_DIR/headscale-admin-preauth-key")"
@@ -416,6 +442,7 @@ main() {
     install_headscale_lxc "$HEADSCALE_CTID"
     seed_npm_proxy_hosts
     configure_host_dnat
+    configure_internal_dns
     write_summary
 }
 

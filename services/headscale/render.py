@@ -39,8 +39,8 @@ def main() -> None:
     copy_tree(src / "init", dest / "init")
     copy_file(src / "config" / "dns_records.json", dest / "dns_records.json")
     render_template(src / ".env.tpl", dest / ".env")
-    render_template(src / "config" / "headscale.yaml.tpl", dest / "headscale_config.yml")
-    render_template(src / "config" / "headplane.yaml.tpl", dest / "headplane_config.yml")
+    copy_file(src / "config" / "headscale.yaml.tpl", dest / "headscale_config.yml")
+    copy_file(src / "config" / "headplane.yaml.tpl", dest / "headplane_config.yml")
 
 
 if __name__ == "__main__":

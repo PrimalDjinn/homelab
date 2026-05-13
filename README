@@ -2,6 +2,22 @@
 
 - First is to obviously setup proxmox on a debian *12* vps/vm/wherever - as long as the provider allows virtualisation all should be well see: https://pve.proxmox.com/wiki/Install_Proxmox_VE_on_Debian_12_Bookworm - the script already does this, unless sth changes with the process, just run it and observe 
 - The setup a subnet, most providers will give a single IP, so subnetting for isolation and sharing is crutial
-- Then we set up a reverse proxy lxc(recommended) or vm - this will be a barebones service, it will be the one to route traffic to the subnets, mapping domain names to services and/or ports
-- Next is to setup headscale, this we will use to connect to our internal services securely without having to do some forwards or even bothering with https in some cases. See https://github.com/PrimalDjinn/mahede
-NOTE: I am considering having the authentication to headscale be handled by a provicer like keycloack which will require isolated hosting(lxc) that service will only expose the wireguard(headscale) port, then I will manage users on there, then because some users may want openpanel(cpanel-like) interface, maybe I can fork it and when they are setting up their services, they request get's hit off to the proxy and it just adds the forwarding of their domain to the defined service and port
+- Then we set up a reverse proxy LXC using Nginx Proxy Manager for the UI. The Proxmox host forwards public 80/443 to this LXC; service ports stay on the internal bridge.
+- Then we set up an auth LXC using Authelia as the OIDC provider.
+- Next is to setup Headscale and Headplane in their own LXC, using the config-init/shared-config pattern from https://github.com/PrimalDjinn/mahede.
+
+Copy `.env.example` to `.env`, set the real domain/IP choices, then run:
+
+```sh
+sudo ./main.sh --all
+```
+
+After provisioning, read `/root/homelab/access.txt` on the Proxmox host for initial credentials, DNS records, Nginx Proxy Manager routes, and the generated `tailscale up` command.
+
+During testing, reset managed service resources with:
+
+```sh
+sudo ./reset.sh --yes
+```
+
+Add `--network` to remove the internal bridge/NAT/dnsmasq config, and `--proxmox` to clear Proxmox setup markers and restore `/etc/hosts` from the setup backup.

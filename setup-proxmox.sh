@@ -73,8 +73,8 @@ prepare() {
 
 restore_host() {
     if [[ ! -f "$HOSTS_FILE.bak" ]]; then
-        echo "No backup file was found"
-        return 1
+        warn "No $HOSTS_FILE.bak found; skipping hosts restore"
+        return 0
     fi
     cp "$HOSTS_FILE.bak" "$HOSTS_FILE"
 }

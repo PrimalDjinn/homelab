@@ -216,34 +216,34 @@ cleanup_proxmox_markers() {
 }
 
 cleanup_pve_firewall_rules() {
-    local node
+    local firewall_files=()
     local firewall_file
     local tmp
 
-    if ! command -v pvenode >/dev/null 2>&1; then
+    if [[ ! -d /etc/pve/nodes ]]; then
+        warn "/etc/pve/nodes is not available; skipping Proxmox firewall cleanup"
         return
     fi
 
-    node="$(pvenode status | awk -F': ' '/^Node/ { print $2; exit }')"
-    if [[ -z "$node" ]]; then
-        node="$(hostname)"
-    fi
-
-    firewall_file="/etc/pve/nodes/$node/host.fw"
-    if [[ ! -f "$firewall_file" ]]; then
+    shopt -s nullglob
+    firewall_files=(/etc/pve/nodes/*/host.fw)
+    shopt -u nullglob
+    if ((${#firewall_files[@]} == 0)); then
         return
     fi
 
-    info "Removing homelab Proxmox host firewall rules from $firewall_file"
-    tmp="$(mktemp)"
-    awk '
-        $0 == "# BEGIN HOMELAB RULES" { skip = 1; next }
-        $0 == "# END HOMELAB RULES" { skip = 0; next }
-        /# HOMELAB/ { next }
-        !skip { print }
-    ' "$firewall_file" > "$tmp"
-    cp "$tmp" "$firewall_file"
-    rm -f "$tmp"
+    for firewall_file in "${firewall_files[@]}"; do
+        info "Removing homelab Proxmox host firewall rules from $firewall_file"
+        tmp="$(mktemp)"
+        awk '
+            $0 == "# BEGIN HOMELAB RULES" { skip = 1; next }
+            $0 == "# END HOMELAB RULES" { skip = 0; next }
+            /# HOMELAB/ { next }
+            !skip { print }
+        ' "$firewall_file" > "$tmp"
+        cp "$tmp" "$firewall_file"
+        rm -f "$tmp"
+    done
 
     if [[ "${HOMELAB_ENABLE_PVE_FIREWALL:-false}" == "true" ]] && command -v pve-firewall >/dev/null 2>&1; then
         info "Stopping Proxmox firewall because HOMELAB_ENABLE_PVE_FIREWALL=true for this reset"

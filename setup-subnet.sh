@@ -16,6 +16,151 @@ GATEWAY_IP="${HOMELAB_GATEWAY_IP:-$NETWORK_PREFIX.1}"
 DHCP_START="${HOMELAB_DHCP_START:-$NETWORK_PREFIX.100}"
 DHCP_END="${HOMELAB_DHCP_END:-$NETWORK_PREFIX.200}"
 NETWORK_CIDR="${HOMELAB_NETWORK_CIDR:-$NETWORK_PREFIX.0/24}"
+ENABLE_PVE_FIREWALL="${HOMELAB_ENABLE_PVE_FIREWALL:-false}"
+WIREGUARD_PORT="${WIREGUARD_PORT:-51820}"
+TAILSCALE_WIREGUARD_PORT="${TAILSCALE_WIREGUARD_PORT:-41641}"
+
+configure_pve_firewall() {
+    local node
+    local firewall_file
+    local cluster_firewall_file
+    local rules_file
+
+    if ! command -v pvenode >/dev/null 2>&1 || ! command -v pve-firewall >/dev/null 2>&1; then
+        echo "[!] Proxmox firewall commands not found; skipping Proxmox host firewall rule configuration"
+        return
+    fi
+
+    node="$(pvenode status | awk -F': ' '/^Node/ { print $2; exit }')"
+    if [[ -z "$node" ]]; then
+        node="$(hostname)"
+    fi
+
+    firewall_file="/etc/pve/nodes/$node/host.fw"
+    if [[ ! -d "$(dirname "$firewall_file")" ]]; then
+        echo "[!] Proxmox firewall path $(dirname "$firewall_file") not found; skipping host firewall rules"
+        return
+    fi
+
+    cluster_firewall_file="/etc/pve/firewall/cluster.fw"
+    mkdir -p "$(dirname "$cluster_firewall_file")"
+
+    ensure_pve_firewall_option "$cluster_firewall_file"
+    ensure_pve_firewall_option "$firewall_file"
+
+    echo "[+] Ensuring Proxmox host firewall rules in $firewall_file"
+    rules_file="$(mktemp)"
+    cat > "$rules_file" <<EOF
+IN ACCEPT -p tcp -dport 22 -log nolog # HOMELAB SSH
+IN ACCEPT -p tcp -dport 8006 -log nolog # HOMELAB Proxmox Web UI
+IN ACCEPT -p tcp -dport 80 -log nolog # HOMELAB HTTP reverse proxy
+IN ACCEPT -p tcp -dport 443 -log nolog # HOMELAB HTTPS reverse proxy
+IN ACCEPT -p tcp -dport 5900:5999 -log nolog # HOMELAB Proxmox VNC
+IN ACCEPT -p tcp -dport 3128 -log nolog # HOMELAB Proxmox SPICE proxy
+IN ACCEPT -p udp -dport $WIREGUARD_PORT -log nolog # HOMELAB WireGuard
+IN ACCEPT -p udp -dport $TAILSCALE_WIREGUARD_PORT -log nolog # HOMELAB Tailscale/Headscale WireGuard direct
+IN ACCEPT -p tcp -dport 53 -log nolog # HOMELAB internal DNS
+IN ACCEPT -p udp -dport 53 -log nolog # HOMELAB internal DNS
+IN ACCEPT -p udp -dport 67 -log nolog # HOMELAB internal DHCP
+EOF
+
+    install_pve_firewall_rules "$firewall_file" "$rules_file"
+    rm -f "$rules_file"
+}
+
+ensure_pve_firewall_option() {
+    local firewall_file="$1"
+    local tmp
+
+    touch "$firewall_file"
+    tmp="$(mktemp)"
+    awk '
+        BEGIN {
+            in_options = 0
+            saw_options = 0
+            saw_enable = 0
+        }
+        /^\[OPTIONS\]$/ {
+            in_options = 1
+            saw_options = 1
+            print
+            next
+        }
+        /^\[/ {
+            if (in_options && !saw_enable) {
+                print "enable: 1"
+                saw_enable = 1
+            }
+            in_options = 0
+            print
+            next
+        }
+        in_options && /^enable:/ {
+            print "enable: 1"
+            saw_enable = 1
+            next
+        }
+        { print }
+        END {
+            if (!saw_options) {
+                print ""
+                print "[OPTIONS]"
+                print "enable: 1"
+            } else if (in_options && !saw_enable) {
+                print "enable: 1"
+            }
+        }
+    ' "$firewall_file" > "$tmp"
+    cp "$tmp" "$firewall_file"
+    rm -f "$tmp"
+}
+
+install_pve_firewall_rules() {
+    local firewall_file="$1"
+    local rules_file="$2"
+    local tmp
+
+    tmp="$(mktemp)"
+    awk -v rules_file="$rules_file" '
+        function print_rules(   line) {
+            while ((getline line < rules_file) > 0) {
+                print line
+            }
+            close(rules_file)
+            inserted = 1
+        }
+        $0 == "# BEGIN HOMELAB RULES" { skip = 1; next }
+        $0 == "# END HOMELAB RULES" { skip = 0; next }
+        skip { next }
+        /# HOMELAB/ { next }
+        /^\[RULES\]$/ {
+            in_rules = 1
+            saw_rules = 1
+            print
+            next
+        }
+        /^\[/ {
+            if (in_rules && !inserted) {
+                print_rules()
+            }
+            in_rules = 0
+            print
+            next
+        }
+        { print }
+        END {
+            if (saw_rules && in_rules && !inserted) {
+                print_rules()
+            } else if (!saw_rules) {
+                print ""
+                print "[RULES]"
+                print_rules()
+            }
+        }
+    ' "$firewall_file" > "$tmp"
+    cp "$tmp" "$firewall_file"
+    rm -f "$tmp"
+}
 
 ### 1️⃣ CREATE NETWORK BRIDGES ###
 
@@ -126,9 +271,18 @@ echo "    dns-nameservers $GATEWAY_IP"
 
 ### 6️⃣ ISOLATION BEST PRACTICES ###
 echo ""
-echo "[+] Enabling Proxmox firewall globally"
-pve-firewall start
-systemctl enable pve-firewall --now
+if [[ "$ENABLE_PVE_FIREWALL" == "true" ]]; then
+    configure_pve_firewall
+    if command -v pve-firewall >/dev/null 2>&1; then
+        echo "[+] Enabling Proxmox firewall globally"
+        pve-firewall start
+        systemctl enable pve-firewall --now
+    else
+        echo "[!] pve-firewall not found; leaving Proxmox firewall service unchanged"
+    fi
+else
+    echo "[+] Proxmox firewall left unchanged. Set HOMELAB_ENABLE_PVE_FIREWALL=true to enable it."
+fi
 
 echo ""
 echo "[+] Done! Proxmox is now configured with:"

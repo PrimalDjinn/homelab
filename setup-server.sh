@@ -6,6 +6,16 @@
 
 set -e
 
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+
+if [ -f "$SCRIPT_DIR/.env" ]; then
+    # shellcheck disable=SC1090
+    . "$SCRIPT_DIR/.env"
+fi
+
+WIREGUARD_PORT="${WIREGUARD_PORT:-51820}"
+TAILSCALE_WIREGUARD_PORT="${TAILSCALE_WIREGUARD_PORT:-41641}"
+
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
@@ -162,7 +172,10 @@ ufw allow 5900:5999/tcp comment 'Proxmox VNC'
 ufw allow 3128/tcp comment 'Proxmox SPICE Proxy'
 
 # Allow WireGuard VPN
-ufw allow 51820/udp comment 'WireGuard VPN'
+ufw allow "$WIREGUARD_PORT/udp" comment 'WireGuard VPN'
+
+# Allow Tailscale direct connections if UFW is enabled later
+ufw allow "$TAILSCALE_WIREGUARD_PORT/udp" comment 'Tailscale/Headscale WireGuard direct'
 
 echo -e "${GREEN}✓ UFW rules configured${NC}"
 echo -e "${YELLOW}  UFW is NOT enabled yet. To enable, run: sudo ufw enable${NC}"
@@ -224,9 +237,10 @@ net.ipv4.icmp_echo_ignore_broadcasts = 1
 # Protection against bad ICMP messages
 net.ipv4.icmp_ignore_bogus_error_responses = 1
 
-# Reverse path filtering
-net.ipv4.conf.all.rp_filter = 1
-net.ipv4.conf.default.rp_filter = 1
+# Loose reverse path filtering. Strict mode can break overlay/VPN routing
+# such as Tailscale, subnet routers, and asymmetric provider routing.
+net.ipv4.conf.all.rp_filter = 2
+net.ipv4.conf.default.rp_filter = 2
 
 # Increase system file descriptor limit
 fs.file-max = 65535

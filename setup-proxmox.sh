@@ -143,6 +143,10 @@ STATE_DIR="/var/lib/homelab"
 PENDING_FILE="$STATE_DIR/setup-proxmox.pending"
 DONE_FILE="$STATE_DIR/setup-proxmox.done"
 
+proxmox_installed() {
+    command -v pveversion >/dev/null 2>&1 || dpkg -s proxmox-ve >/dev/null 2>&1
+}
+
 install() {
     # Add the Proxmox VE repository:
     echo "deb [arch=amd64] http://download.proxmox.com/debian/pve bookworm pve-no-subscription" > /etc/apt/sources.list.d/pve-install-repo.list
@@ -180,6 +184,11 @@ if [[ "${1:-}" == "--reset" ]]; then
 elif [[ -f "$PENDING_FILE" ]]; then
     require_root
     complete_install
+elif proxmox_installed; then
+    require_root
+    info "Proxmox is already installed; skipping Debian-to-Proxmox install."
+    mkdir -p "$STATE_DIR"
+    touch "$DONE_FILE"
 elif [[ -f "$DONE_FILE" ]]; then
     info "Proxmox setup is already marked complete."
 else

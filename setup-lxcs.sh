@@ -99,6 +99,39 @@ require_proxmox() {
     need_cmd pvesm
     need_cmd openssl
     ensure_host_python
+    require_pve_config_fs
+}
+
+require_pve_config_fs() {
+    local node
+    local node_dir
+    local lxc_dir
+    local tmp
+
+    if [[ ! -d /etc/pve/nodes ]]; then
+        error "Proxmox config filesystem is unavailable at /etc/pve/nodes. Try: sudo systemctl restart pve-cluster"
+    fi
+
+    node="$(hostname)"
+    node_dir="/etc/pve/nodes/$node"
+    if [[ ! -d "$node_dir" ]]; then
+        node_dir="$(find /etc/pve/nodes -mindepth 1 -maxdepth 1 -type d | head -n1)"
+    fi
+
+    if [[ -z "$node_dir" || ! -d "$node_dir" ]]; then
+        error "No Proxmox node directory found under /etc/pve/nodes. Try: sudo systemctl restart pve-cluster"
+    fi
+
+    lxc_dir="$node_dir/lxc"
+    if [[ ! -d "$lxc_dir" ]]; then
+        error "Proxmox LXC config directory is missing: $lxc_dir. Try: sudo systemctl restart pve-cluster"
+    fi
+
+    tmp="$lxc_dir/.homelab-write-test.$$"
+    if ! : > "$tmp" 2>/dev/null; then
+        error "Cannot write to $lxc_dir. Try: sudo systemctl restart pve-cluster"
+    fi
+    rm -f "$tmp"
 }
 
 template_storage() {
@@ -141,6 +174,7 @@ validate_template_ref() {
 ensure_lxc() {
     local ctid="$1" hostname="$2" ip="$3" memory="$4" cores="$5" disk="$6" template="$7"
     local root_storage root_password
+    local create_output
 
     if pct status "$ctid" >/dev/null 2>&1; then
         info "LXC $ctid ($hostname) already exists; ensuring it is running"
@@ -153,7 +187,7 @@ ensure_lxc() {
     root_password="$(secret_file "$SECRETS_DIR/lxc-root-password" 32)"
 
     info "Creating LXC $ctid ($hostname) at $ip"
-    pct create "$ctid" "$template" \
+    if ! create_output="$(pct create "$ctid" "$template" \
         --hostname "$hostname" \
         --memory "$memory" \
         --cores "$cores" \
@@ -165,7 +199,14 @@ ensure_lxc() {
         --nameserver "$GATEWAY_IP" \
         --onboot 1 \
         --password "$root_password" \
-        --start 1
+        --start 1 2>&1)"; then
+        printf '%s\n' "$create_output" >&2
+        pct unlock "$ctid" >/dev/null 2>&1 || true
+        pct destroy "$ctid" --purge 1 >/dev/null 2>&1 || true
+        error "Failed to create LXC $ctid. If this mentions /etc/pve, run: sudo systemctl restart pve-cluster"
+    fi
+
+    [[ -n "$create_output" ]] && printf '%s\n' "$create_output"
 }
 
 bootstrap_lxc() {

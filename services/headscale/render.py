@@ -33,7 +33,7 @@ def main() -> None:
         shutil.rmtree(dest)
     dest.mkdir(parents=True)
 
-    for name in ("docker-compose.yml", ".env.example", "start.sh", "README.md"):
+    for name in ("docker-compose.yml", "start.sh", "README.md"):
         copy_file(src / name, dest / name)
 
     copy_tree(src / "init", dest / "init")

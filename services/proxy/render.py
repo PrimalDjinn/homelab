@@ -1,12 +1,19 @@
 #!/usr/bin/env python3
 import argparse
+import os
 import shutil
+import string
 from pathlib import Path
 
 
 def copy_file(src: Path, dest: Path) -> None:
     dest.parent.mkdir(parents=True, exist_ok=True)
     shutil.copy2(src, dest)
+
+
+def render_template(src: Path, dest: Path) -> None:
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    dest.write_text(string.Template(src.read_text()).safe_substitute(os.environ))
 
 
 def main() -> None:
@@ -20,8 +27,9 @@ def main() -> None:
         shutil.rmtree(dest)
     dest.mkdir(parents=True)
 
-    for name in ("docker-compose.yml", ".env.example", "start.sh", "README.md"):
+    for name in ("docker-compose.yml", "start.sh", "README.md"):
         copy_file(src / name, dest / name)
+    render_template(src / ".env.example", dest / ".env")
 
 
 if __name__ == "__main__":

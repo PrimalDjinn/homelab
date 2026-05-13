@@ -4,6 +4,11 @@ set -euo pipefail
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/utils.sh"
 
+if [[ -f "$SCRIPT_DIR/.env" ]]; then
+	# shellcheck disable=SC1090
+	source "$SCRIPT_DIR/.env"
+fi
+
 issue_warning() {
 	info "Proxmox setup complete; rerun with --all to setup the server"
 	warn "Make sure you have an SSH key and have it set up, that setup step will disable ssh password access"

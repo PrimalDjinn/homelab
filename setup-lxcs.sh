@@ -34,6 +34,8 @@ HEADSCALE_DOMAIN="${HEADSCALE_DOMAIN:-headscale.$DOMAIN}"
 HEADPLANE_DOMAIN="${HEADPLANE_DOMAIN:-headplane.$DOMAIN}"
 LE_EMAIL="${LE_EMAIL:-admin@$DOMAIN}"
 AUTH_ADMIN_USER="${AUTH_ADMIN_USER:-admin}"
+NPM_ADMIN_EMAIL="${NPM_ADMIN_EMAIL:-admin@example.com}"
+NPM_DEFAULT_PASSWORD="${NPM_DEFAULT_PASSWORD:-changeme}"
 STATE_DIR="${STATE_DIR:-/root/homelab}"
 SECRETS_DIR="$STATE_DIR/secrets"
 GENERATED_DIR="$STATE_DIR/generated"
@@ -178,6 +180,7 @@ install_proxy_lxc() {
     install_docker "$ctid"
 
     info "Installing Nginx Proxy Manager in LXC $ctid"
+    export NPM_VERSION="${NPM_VERSION:-latest}"
     python3 "$SERVICES_DIR/proxy/render.py" --output-dir "$GENERATED_DIR/proxy"
     copy_dir_to_lxc "$ctid" "$GENERATED_DIR/proxy" /opt/nginx-proxy-manager
     pct_exec "$ctid" "chmod +x /opt/nginx-proxy-manager/start.sh && /opt/nginx-proxy-manager/start.sh"
@@ -193,7 +196,7 @@ seed_npm_proxy_hosts() {
         return
     }
 
-    token="$(pct_exec "$ctid" "curl -fsS -X POST http://127.0.0.1:81/api/tokens -H 'Content-Type: application/json' --data '{\"identity\":\"admin@example.com\",\"secret\":\"changeme\"}' | jq -r '.token // empty'" 2>/dev/null || true)"
+    token="$(pct_exec "$ctid" "curl -fsS -X POST http://127.0.0.1:81/api/tokens -H 'Content-Type: application/json' --data \"\$(jq -nc --arg identity $(quote "$NPM_ADMIN_EMAIL") --arg secret $(quote "$NPM_DEFAULT_PASSWORD") '{identity:\$identity,secret:\$secret}')\" | jq -r '.token // empty'" 2>/dev/null || true)"
     if [[ -z "$token" ]]; then
         warn "Could not log in to Nginx Proxy Manager with default first-run credentials; seed hosts manually in the UI."
         return
@@ -240,6 +243,7 @@ install_auth_lxc() {
     admin_hash="$(pct_exec "$ctid" "docker run --rm authelia/authelia:latest authelia crypto hash generate argon2 --password $(quote "$admin_password") | awk -F'Digest: ' '/Digest/ { print \$2 }'")"
     headscale_client_hash="$(pct_exec "$ctid" "docker run --rm authelia/authelia:latest authelia crypto hash generate pbkdf2 --password $(quote "$oidc_secret") | awk -F'Digest: ' '/Digest/ { print \$2 }'")"
 
+    export AUTHELIA_VERSION="${AUTHELIA_VERSION:-latest}"
     export DOMAIN AUTH_DOMAIN HEADSCALE_DOMAIN HEADPLANE_DOMAIN AUTH_ADMIN_USER
     export AUTHELIA_JWT_SECRET="$jwt_secret"
     export AUTHELIA_SESSION_SECRET="$session_secret"
@@ -266,6 +270,8 @@ render_headscale_stack() {
     local api_key="${1:-}"
 
     export DOMAIN AUTH_DOMAIN HEADSCALE_DOMAIN HEADPLANE_DOMAIN
+    export HEADSCALE_VERSION="${HEADSCALE_VERSION:-0.28.0}"
+    export HEADPLANE_VERSION="${HEADPLANE_VERSION:-latest}"
     export HEADSCALE_URL="http://headscale:8080"
     export HEADSCALE_PUBLIC_URL="https://$HEADSCALE_DOMAIN"
     export HEADPLANE_SERVER__BASE_URL="https://$HEADPLANE_DOMAIN"
@@ -391,7 +397,8 @@ Public DNS records to create:
 
 Nginx Proxy Manager:
 - Internal admin URL: http://$PROXY_IP:81
-- Default first login is usually admin@example.com / changeme. Change it immediately.
+- NPM bootstrap login used for seeding: $NPM_ADMIN_EMAIL / $NPM_DEFAULT_PASSWORD
+- Change the NPM admin account immediately after first login.
 - Add proxy hosts:
   - $AUTH_DOMAIN -> http://$AUTH_IP:9091
   - $HEADSCALE_DOMAIN -> http://$HEADSCALE_IP:8080

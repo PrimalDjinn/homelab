@@ -4,6 +4,11 @@ set -euo pipefail
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/utils.sh"
 
+if [[ -f "$SCRIPT_DIR/.env" ]]; then
+    # shellcheck disable=SC1090
+    source "$SCRIPT_DIR/.env"
+fi
+
 HOSTS_FILE='/etc/hosts'
 
 check_hosts() {

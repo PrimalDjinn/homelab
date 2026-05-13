@@ -27,9 +27,10 @@ def main() -> None:
         shutil.rmtree(dest)
     dest.mkdir(parents=True)
 
-    for name in ("docker-compose.yml", ".env.example", "start.sh", "README.md"):
+    for name in ("docker-compose.yml", "start.sh", "README.md"):
         copy_file(src / name, dest / name)
 
+    render_template(src / ".env.example", dest / ".env")
     render_template(src / "config" / "configuration.yml.tpl", dest / "config" / "configuration.yml")
     render_template(src / "config" / "users_database.yml.tpl", dest / "config" / "users_database.yml")
 

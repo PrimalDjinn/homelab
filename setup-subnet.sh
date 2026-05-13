@@ -19,6 +19,76 @@ NETWORK_CIDR="${HOMELAB_NETWORK_CIDR:-$NETWORK_PREFIX.0/24}"
 ENABLE_PVE_FIREWALL="${HOMELAB_ENABLE_PVE_FIREWALL:-false}"
 WIREGUARD_PORT="${WIREGUARD_PORT:-51820}"
 TAILSCALE_WIREGUARD_PORT="${TAILSCALE_WIREGUARD_PORT:-41641}"
+NETWORK_RELOAD_TIMEOUT="${HOMELAB_NETWORK_RELOAD_TIMEOUT:-60}"
+NETWORK_RELOAD_RETRY_INTERVAL="${HOMELAB_NETWORK_RELOAD_RETRY_INTERVAL:-3}"
+
+is_network_lock_error() {
+    local output="${1,,}"
+
+    [[ "$output" == *"another instance"* ]] || \
+        [[ "$output" == *"lock"* ]] || \
+        [[ "$output" == *"locked"* ]]
+}
+
+show_network_processes() {
+    if command -v ps >/dev/null 2>&1; then
+        ps -eo pid,ppid,stat,etime,cmd | awk '
+            /[i]fup|[i]fdown|[i]freload|[i]fquery|[n]etworking/ { print }
+        ' || true
+    fi
+}
+
+run_network_command_with_retry() {
+    local output
+    local status
+    local attempt=1
+    local started=$SECONDS
+
+    while true; do
+        if output="$("$@" 2>&1)"; then
+            [[ -n "$output" ]] && printf '%s\n' "$output"
+            return 0
+        fi
+
+        status=$?
+        if ! is_network_lock_error "$output"; then
+            [[ -n "$output" ]] && printf '%s\n' "$output" >&2
+            return "$status"
+        fi
+
+        if (( SECONDS - started >= NETWORK_RELOAD_TIMEOUT )); then
+            echo "[!] Network command is still locked after ${NETWORK_RELOAD_TIMEOUT}s: $*" >&2
+            [[ -n "$output" ]] && printf '%s\n' "$output" >&2
+            echo "[!] Matching network processes:" >&2
+            show_network_processes >&2
+            return "$status"
+        fi
+
+        echo "[!] Network command is locked; retrying in ${NETWORK_RELOAD_RETRY_INTERVAL}s (attempt $attempt): $*"
+        [[ -n "$output" ]] && printf '%s\n' "$output"
+        sleep "$NETWORK_RELOAD_RETRY_INTERVAL"
+        attempt=$((attempt + 1))
+    done
+}
+
+reload_network_bridge() {
+    if command -v ifreload >/dev/null 2>&1; then
+        echo "[+] Applying network config with ifreload -a"
+        run_network_command_with_retry ifreload -a
+        return
+    fi
+
+    if ! command -v ifup >/dev/null 2>&1; then
+        echo "Required command missing: ifup" >&2
+        return 1
+    fi
+
+    echo "[+] Applying network config with ifup/ifdown"
+    if command -v ifdown >/dev/null 2>&1; then
+        run_network_command_with_retry ifdown "$VM_BRIDGE" || true
+    fi
+    run_network_command_with_retry ifup "$VM_BRIDGE"
+}
 
 configure_pve_firewall() {
     local node
@@ -184,8 +254,7 @@ EOF
 fi
 
 echo "[+] Reloading network..."
-ifdown "$VM_BRIDGE" 2>/dev/null || true
-ifup "$VM_BRIDGE"
+reload_network_bridge
 
 ### 2️⃣ ENABLE IP FORWARDING ###
 

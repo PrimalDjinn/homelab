@@ -183,28 +183,32 @@ EOF
 }
 
 configure_pve_firewall() {
-    local node
+    local node_dir
     local firewall_file
     local cluster_firewall_file
     local rules_file
 
-    if ! command -v pvenode >/dev/null 2>&1 || ! command -v pve-firewall >/dev/null 2>&1; then
-        echo "[!] Proxmox firewall commands not found; skipping Proxmox host firewall rule configuration"
+    if [[ ! -d /etc/pve/nodes ]]; then
+        echo "[!] /etc/pve/nodes is not available; skipping Proxmox host firewall rule configuration"
         return
     fi
 
-    node="$(pvenode status | awk -F': ' '/^Node/ { print $2; exit }')"
-    if [[ -z "$node" ]]; then
-        node="$(hostname)"
+    node_dir="/etc/pve/nodes/$(hostname)"
+    if [[ ! -d "$node_dir" ]]; then
+        node_dir="$(find /etc/pve/nodes -mindepth 1 -maxdepth 1 -type d | head -n1)"
     fi
 
-    firewall_file="/etc/pve/nodes/$node/host.fw"
-    if [[ ! -d "$(dirname "$firewall_file")" ]]; then
-        echo "[!] Proxmox firewall path $(dirname "$firewall_file") not found; skipping host firewall rules"
+    if [[ -z "$node_dir" || ! -d "$node_dir" ]]; then
+        echo "[!] No Proxmox node firewall directory found; skipping host firewall rules"
         return
     fi
 
+    firewall_file="$node_dir/host.fw"
     cluster_firewall_file="/etc/pve/firewall/cluster.fw"
+    if [[ ! -d /etc/pve/firewall ]]; then
+        echo "[!] /etc/pve/firewall is not available; skipping Proxmox firewall rules"
+        return
+    fi
     mkdir -p "$(dirname "$cluster_firewall_file")"
 
     ensure_pve_firewall_option "$cluster_firewall_file"
@@ -228,6 +232,18 @@ EOF
 
     install_pve_firewall_rules "$firewall_file" "$rules_file"
     rm -f "$rules_file"
+}
+
+enable_pve_firewall() {
+    if ! command -v pve-firewall >/dev/null 2>&1; then
+        echo "[!] pve-firewall not found; leaving Proxmox firewall service unchanged"
+        return
+    fi
+
+    echo "[+] Enabling Proxmox firewall globally"
+    pve-firewall start >/dev/null 2>&1 || echo "[!] pve-firewall start failed; Proxmox IPC may be unavailable"
+    systemctl enable pve-firewall >/dev/null 2>&1 || echo "[!] Could not enable pve-firewall service"
+    systemctl start pve-firewall >/dev/null 2>&1 || echo "[!] Could not start pve-firewall service"
 }
 
 ensure_pve_firewall_option() {
@@ -420,13 +436,7 @@ echo "    dns-nameservers $GATEWAY_IP"
 echo ""
 if [[ "$ENABLE_PVE_FIREWALL" == "true" ]]; then
     configure_pve_firewall
-    if command -v pve-firewall >/dev/null 2>&1; then
-        echo "[+] Enabling Proxmox firewall globally"
-        pve-firewall start
-        systemctl enable pve-firewall --now
-    else
-        echo "[!] pve-firewall not found; leaving Proxmox firewall service unchanged"
-    fi
+    enable_pve_firewall
 else
     echo "[+] Proxmox firewall left unchanged. Set HOMELAB_ENABLE_PVE_FIREWALL=true to enable it."
 fi

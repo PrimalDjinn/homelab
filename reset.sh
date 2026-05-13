@@ -233,4 +233,6 @@ if [[ "$RESET_PROXMOX" == true ]]; then
     cleanup_proxmox_markers
 fi
 
+bash "$SCRIPT_DIR/setup-proxmox.sh" --reset || warn "An error occurred when trying to reset proxmox"
+
 info "Reset complete."

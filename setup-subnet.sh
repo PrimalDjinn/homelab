@@ -62,7 +62,7 @@ if [ -z "$MAIN_INTERFACE" ]; then
 fi
 
 # === NAT RULES FOR INTERNET ACCESS ===
-# Enable NAT for Dev network (vmbr10) to access internet
+# Enable NAT for Network (vmbr10) to access internet
 iptables -t nat -C POSTROUTING -s "$NETWORK_CIDR" -o "$MAIN_INTERFACE" -j MASQUERADE 2>/dev/null || \
     iptables -t nat -A POSTROUTING -s "$NETWORK_CIDR" -o "$MAIN_INTERFACE" -j MASQUERADE
 

@@ -13,9 +13,6 @@ if [ -f "$SCRIPT_DIR/.env" ]; then
     . "$SCRIPT_DIR/.env"
 fi
 
-WIREGUARD_PORT="${WIREGUARD_PORT:-51820}"
-TAILSCALE_WIREGUARD_PORT="${TAILSCALE_WIREGUARD_PORT:-41641}"
-
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
@@ -58,7 +55,6 @@ echo -e "${YELLOW}[2/9] Installing security tools...${NC}"
 apt install -y \
     fail2ban \
     unattended-upgrades \
-    ufw \
     aide \
     auditd \
     logwatch \
@@ -151,35 +147,9 @@ systemctl enable fail2ban
 systemctl restart fail2ban
 echo -e "${GREEN}✓ Fail2Ban configured and started${NC}\n"
 
-# 6. Configure UFW Firewall (without enabling it yet)
-echo -e "${YELLOW}[6/9] Configuring UFW firewall...${NC}"
-# Set defaults
-ufw default deny incoming
-ufw default allow outgoing
-
-# Allow SSH
-ufw allow 22/tcp comment 'SSH'
-
-# Allow Proxmox Web Interface
-ufw allow 8006/tcp comment 'Proxmox Web UI'
-
-# Allow public web traffic forwarded to Nginx Proxy Manager
-ufw allow 80/tcp comment 'HTTP reverse proxy'
-ufw allow 443/tcp comment 'HTTPS reverse proxy'
-
-# Allow Proxmox clustering (if needed)
-ufw allow 5900:5999/tcp comment 'Proxmox VNC'
-ufw allow 3128/tcp comment 'Proxmox SPICE Proxy'
-
-# Allow WireGuard VPN
-ufw allow "$WIREGUARD_PORT/udp" comment 'WireGuard VPN'
-
-# Allow Tailscale direct connections if UFW is enabled later
-ufw allow "$TAILSCALE_WIREGUARD_PORT/udp" comment 'Tailscale/Headscale WireGuard direct'
-
-echo -e "${GREEN}✓ UFW rules configured${NC}"
-echo -e "${YELLOW}  UFW is NOT enabled yet. To enable, run: sudo ufw enable${NC}"
-echo -e "${YELLOW}  Review rules first with: sudo ufw status${NC}\n"
+# 6. Firewall
+echo -e "${YELLOW}[6/9] Firewall configuration...${NC}"
+echo -e "${GREEN}✓ Skipping UFW; Proxmox networking is managed with explicit iptables NAT/DNAT rules${NC}\n"
 
 # 7. Secure shared memory
 echo -e "${YELLOW}[7/9] Securing shared memory...${NC}"
@@ -270,14 +240,11 @@ echo -e "Backups saved to: ${YELLOW}$BACKUP_DIR${NC}"
 echo ""
 echo -e "${YELLOW}Next Steps:${NC}"
 echo "1. Test SSH access in a NEW terminal before closing this one"
-echo "2. Review UFW rules: sudo ufw status"
-echo "3. Enable UFW when ready: sudo ufw enable"
-echo "4. Restart SSH: sudo systemctl restart sshd"
-echo "5. Check Fail2Ban: sudo fail2ban-client status"
-echo "6. Review logs: sudo tail -f /var/log/fail2ban.log"
+echo "2. Restart SSH: sudo systemctl restart sshd"
+echo "3. Check Fail2Ban: sudo fail2ban-client status"
+echo "4. Review logs: sudo tail -f /var/log/fail2ban.log"
 echo ""
 echo -e "${RED}IMPORTANT:${NC}"
 echo "- Make sure you have SSH keys configured before disabling password auth"
 echo "- Test SSH access before logging out"
-echo "- UFW is configured but NOT enabled yet"
 echo ""

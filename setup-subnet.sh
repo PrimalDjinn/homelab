@@ -16,7 +16,7 @@ GATEWAY_IP="${HOMELAB_GATEWAY_IP:-$NETWORK_PREFIX.1}"
 DHCP_START="${HOMELAB_DHCP_START:-$NETWORK_PREFIX.100}"
 DHCP_END="${HOMELAB_DHCP_END:-$NETWORK_PREFIX.200}"
 NETWORK_CIDR="${HOMELAB_NETWORK_CIDR:-$NETWORK_PREFIX.0/24}"
-ENABLE_PVE_FIREWALL="${HOMELAB_ENABLE_PVE_FIREWALL:-false}"
+ENABLE_PVE_FIREWALL="${HOMELAB_ENABLE_PVE_FIREWALL:-true}"
 WIREGUARD_PORT="${WIREGUARD_PORT:-51820}"
 TAILSCALE_WIREGUARD_PORT="${TAILSCALE_WIREGUARD_PORT:-41641}"
 NETWORK_RELOAD_TIMEOUT="${HOMELAB_NETWORK_RELOAD_TIMEOUT:-60}"
@@ -203,14 +203,13 @@ configure_pve_firewall() {
         return
     fi
 
-    firewall_file="$node_dir/host.fw"
-    cluster_firewall_file="/etc/pve/firewall/cluster.fw"
     if [[ ! -d /etc/pve/firewall ]]; then
         echo "[!] /etc/pve/firewall is not available; skipping Proxmox firewall rules"
         return
     fi
-    mkdir -p "$(dirname "$cluster_firewall_file")"
 
+    firewall_file="$node_dir/host.fw"
+    cluster_firewall_file="/etc/pve/firewall/cluster.fw"
     ensure_pve_firewall_option "$cluster_firewall_file"
     ensure_pve_firewall_option "$firewall_file"
 
@@ -225,9 +224,9 @@ IN ACCEPT -p tcp -dport 5900:5999 -log nolog # HOMELAB Proxmox VNC
 IN ACCEPT -p tcp -dport 3128 -log nolog # HOMELAB Proxmox SPICE proxy
 IN ACCEPT -p udp -dport $WIREGUARD_PORT -log nolog # HOMELAB WireGuard
 IN ACCEPT -p udp -dport $TAILSCALE_WIREGUARD_PORT -log nolog # HOMELAB Tailscale/Headscale WireGuard direct
-IN ACCEPT -p tcp -dport 53 -log nolog # HOMELAB internal DNS
-IN ACCEPT -p udp -dport 53 -log nolog # HOMELAB internal DNS
-IN ACCEPT -p udp -dport 67 -log nolog # HOMELAB internal DHCP
+IN ACCEPT -p tcp -i $VM_BRIDGE -dport 53 -log nolog # HOMELAB internal DNS
+IN ACCEPT -p udp -i $VM_BRIDGE -dport 53 -log nolog # HOMELAB internal DNS
+IN ACCEPT -p udp -i $VM_BRIDGE -dport 67 -log nolog # HOMELAB internal DHCP
 EOF
 
     install_pve_firewall_rules "$firewall_file" "$rules_file"
@@ -301,9 +300,11 @@ install_pve_firewall_rules() {
     tmp="$(mktemp)"
     awk -v rules_file="$rules_file" '
         function print_rules(   line) {
+            print "# BEGIN HOMELAB RULES"
             while ((getline line < rules_file) > 0) {
                 print line
             }
+            print "# END HOMELAB RULES"
             close(rules_file)
             inserted = 1
         }
@@ -432,7 +433,7 @@ echo "    address $NETWORK_PREFIX.50/24"
 echo "    gateway $GATEWAY_IP"
 echo "    dns-nameservers $GATEWAY_IP"
 
-### 6️⃣ ISOLATION BEST PRACTICES ###
+### 6️⃣ HOST FIREWALL ###
 echo ""
 if [[ "$ENABLE_PVE_FIREWALL" == "true" ]]; then
     configure_pve_firewall

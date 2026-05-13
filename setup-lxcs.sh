@@ -114,16 +114,28 @@ ensure_template() {
     storage="$(template_storage)"
     [[ -n "$storage" ]] || error "No Proxmox storage with vztmpl content found."
 
-    pveam update
+    pveam update >&2
     template="$(pveam available --section system | awk '/debian-12-standard/ { print $2 }' | sort -V | tail -n1)"
     [[ -n "$template" ]] || error "Could not find a Debian 12 LXC template."
 
     if ! pveam list "$storage" | awk '{ print $1 }' | grep -q "/$template$"; then
-        info "Downloading LXC template $template to $storage"
-        pveam download "$storage" "$template"
+        info "Downloading LXC template $template to $storage" >&2
+        pveam download "$storage" "$template" >&2
     fi
 
     echo "$storage:vztmpl/$template"
+}
+
+validate_template_ref() {
+    local template="$1"
+
+    if [[ "$template" == *$'\n'* || "$template" == *$'\r'* ]]; then
+        error "Resolved LXC template contains unexpected output: $template"
+    fi
+
+    if ((${#template} > 255)); then
+        error "Resolved LXC template is too long for pct: $template"
+    fi
 }
 
 ensure_lxc() {
@@ -159,7 +171,7 @@ ensure_lxc() {
 bootstrap_lxc() {
     local ctid="$1"
     info "Bootstrapping base packages in LXC $ctid"
-    pct_exec "$ctid" "export DEBIAN_FRONTEND=noninteractive; apt-get update && apt-get install -y ca-certificates curl file gnupg jq openssl sqlite3 tar ufw"
+    pct_exec "$ctid" "export DEBIAN_FRONTEND=noninteractive; apt-get update && apt-get install -y ca-certificates curl file gnupg jq openssl sqlite3 tar"
 }
 
 install_docker() {
@@ -440,6 +452,7 @@ main() {
     local template
     require_proxmox
     template="$(ensure_template)"
+    validate_template_ref "$template"
 
     ensure_lxc "$PROXY_CTID" "$PROXY_HOSTNAME" "$PROXY_IP" 768 1 8 "$template"
     ensure_lxc "$AUTH_CTID" "$AUTH_HOSTNAME" "$AUTH_IP" 768 1 6 "$template"

@@ -245,7 +245,7 @@ cleanup_pve_firewall_rules() {
         rm -f "$tmp"
     done
 
-    if [[ "${HOMELAB_ENABLE_PVE_FIREWALL:-false}" == "true" ]] && command -v pve-firewall >/dev/null 2>&1; then
+    if [[ "${HOMELAB_ENABLE_PVE_FIREWALL:-true}" == "true" ]] && command -v pve-firewall >/dev/null 2>&1; then
         info "Stopping Proxmox firewall because HOMELAB_ENABLE_PVE_FIREWALL=true for this reset"
         pve-firewall stop >/dev/null 2>&1 || true
         systemctl disable --now pve-firewall >/dev/null 2>&1 || true

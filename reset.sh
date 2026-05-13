@@ -148,30 +148,32 @@ cleanup_network_rules() {
 }
 
 cleanup_bridge() {
-    if [[ ! -f /etc/network/interfaces ]]; then
-        warn "/etc/network/interfaces not found; skipping bridge cleanup"
-        return
+    if [[ -f /etc/network/interfaces ]] && grep -qE "^iface[[:space:]]+$VM_BRIDGE[[:space:]]+" /etc/network/interfaces; then
+        info "Removing $VM_BRIDGE from /etc/network/interfaces"
+        cp /etc/network/interfaces "/etc/network/interfaces.reset.bak.$(date +%F-%H-%M)"
+        awk -v bridge="$VM_BRIDGE" '
+            $0 == "# === Internal Network ===" { skip = 1; next }
+            skip && $1 == "auto" && $2 == bridge { next }
+            skip && $1 == "iface" && $2 == bridge { next }
+            skip && /^    / { next }
+            skip { skip = 0 }
+            { print }
+        ' /etc/network/interfaces > /tmp/homelab-interfaces
+        cp /tmp/homelab-interfaces /etc/network/interfaces
+        rm -f /tmp/homelab-interfaces
+    else
+        info "$VM_BRIDGE is not configured in /etc/network/interfaces; skipping config cleanup"
     fi
 
-    if ! grep -qE "^iface[[:space:]]+$VM_BRIDGE[[:space:]]+" /etc/network/interfaces; then
-        info "$VM_BRIDGE is not configured in /etc/network/interfaces; skipping"
-        return
+    if command -v ifdown >/dev/null 2>&1; then
+        ifdown "$VM_BRIDGE" >/dev/null 2>&1 || true
     fi
 
-    info "Removing $VM_BRIDGE from /etc/network/interfaces"
-    cp /etc/network/interfaces "/etc/network/interfaces.reset.bak.$(date +%F-%H-%M)"
-    awk -v bridge="$VM_BRIDGE" '
-        $0 == "# === Internal Network ===" { skip = 1; next }
-        skip && $1 == "auto" && $2 == bridge { next }
-        skip && $1 == "iface" && $2 == bridge { next }
-        skip && /^    / { next }
-        skip { skip = 0 }
-        { print }
-    ' /etc/network/interfaces > /tmp/homelab-interfaces
-    cp /tmp/homelab-interfaces /etc/network/interfaces
-    rm -f /tmp/homelab-interfaces
-
-    ifdown "$VM_BRIDGE" >/dev/null 2>&1 || true
+    if command -v ip >/dev/null 2>&1 && ip link show "$VM_BRIDGE" >/dev/null 2>&1; then
+        info "Deleting runtime bridge $VM_BRIDGE"
+        ip link set "$VM_BRIDGE" down >/dev/null 2>&1 || true
+        ip link delete "$VM_BRIDGE" type bridge >/dev/null 2>&1 || true
+    fi
 }
 
 cleanup_service_dns() {

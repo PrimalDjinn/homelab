@@ -21,6 +21,14 @@ WIREGUARD_PORT="${WIREGUARD_PORT:-51820}"
 TAILSCALE_WIREGUARD_PORT="${TAILSCALE_WIREGUARD_PORT:-41641}"
 NETWORK_RELOAD_TIMEOUT="${HOMELAB_NETWORK_RELOAD_TIMEOUT:-60}"
 NETWORK_RELOAD_RETRY_INTERVAL="${HOMELAB_NETWORK_RELOAD_RETRY_INTERVAL:-3}"
+DNSMASQ_CONFIG="/etc/dnsmasq.d/proxmox-networks.conf"
+
+require_root() {
+    if [[ $EUID -ne 0 ]]; then
+        echo "Run as root or with sudo." >&2
+        exit 1
+    fi
+}
 
 is_network_lock_error() {
     local output="${1,,}"
@@ -74,20 +82,104 @@ run_network_command_with_retry() {
 reload_network_bridge() {
     if command -v ifreload >/dev/null 2>&1; then
         echo "[+] Applying network config with ifreload -a"
-        run_network_command_with_retry ifreload -a
-        return
+        if run_network_command_with_retry ifreload -a; then
+            return 0
+        fi
+
+        echo "[!] ifreload failed; trying direct bridge recovery for $VM_BRIDGE"
     fi
 
-    if ! command -v ifup >/dev/null 2>&1; then
-        echo "Required command missing: ifup" >&2
+    if command -v ifup >/dev/null 2>&1; then
+        echo "[+] Applying network config with ifup/ifdown"
+        if command -v ifdown >/dev/null 2>&1; then
+            run_network_command_with_retry ifdown "$VM_BRIDGE" || true
+        fi
+        run_network_command_with_retry ifup "$VM_BRIDGE" && return 0
+
+        echo "[!] ifup failed; trying direct bridge recovery for $VM_BRIDGE"
+    fi
+
+    ensure_runtime_bridge
+}
+
+ensure_runtime_bridge() {
+    if ! command -v ip >/dev/null 2>&1; then
+        echo "Required command missing: ip" >&2
         return 1
     fi
 
-    echo "[+] Applying network config with ifup/ifdown"
-    if command -v ifdown >/dev/null 2>&1; then
-        run_network_command_with_retry ifdown "$VM_BRIDGE" || true
+    if ! ip link show "$VM_BRIDGE" >/dev/null 2>&1; then
+        echo "[+] Creating runtime bridge $VM_BRIDGE"
+        ip link add name "$VM_BRIDGE" type bridge
     fi
-    run_network_command_with_retry ifup "$VM_BRIDGE"
+
+    if ! ip -4 addr show dev "$VM_BRIDGE" | grep -qF " $GATEWAY_IP/24"; then
+        echo "[+] Ensuring $VM_BRIDGE has $GATEWAY_IP/24"
+        ip addr flush dev "$VM_BRIDGE" scope global || true
+        ip addr add "$GATEWAY_IP/24" dev "$VM_BRIDGE"
+    fi
+
+    ip link set "$VM_BRIDGE" up
+}
+
+assert_bridge_ready() {
+    if ! ip link show "$VM_BRIDGE" >/dev/null 2>&1; then
+        echo "[!] $VM_BRIDGE does not exist after network reload; recovering directly"
+        ensure_runtime_bridge
+    fi
+
+    if ! ip -4 addr show dev "$VM_BRIDGE" | grep -qF " $GATEWAY_IP/24"; then
+        echo "[!] $VM_BRIDGE is missing $GATEWAY_IP/24 after network reload; recovering directly"
+        ensure_runtime_bridge
+    fi
+}
+
+write_if_changed() {
+    local destination="$1"
+    local source="$2"
+
+    if [[ -f "$destination" ]] && cmp -s "$source" "$destination"; then
+        rm -f "$source"
+        return 1
+    fi
+
+    cp "$source" "$destination"
+    rm -f "$source"
+    return 0
+}
+
+configure_dnsmasq() {
+    local tmp
+
+    echo "[+] Setting up DNS forwarding"
+    DEBIAN_FRONTEND=noninteractive apt-get install -y dnsmasq
+
+    tmp="$(mktemp)"
+    cat <<EOF >"$tmp"
+# DNS and DHCP for Homelab Network
+interface=$VM_BRIDGE
+bind-dynamic
+dhcp-range=$VM_BRIDGE,$DHCP_START,$DHCP_END,24h
+dhcp-option=$VM_BRIDGE,3,$GATEWAY_IP
+dhcp-option=$VM_BRIDGE,6,$GATEWAY_IP
+server=1.1.1.1
+server=1.0.0.1
+EOF
+
+    if write_if_changed "$DNSMASQ_CONFIG" "$tmp"; then
+        echo "[+] Wrote $DNSMASQ_CONFIG"
+    else
+        echo "[+] $DNSMASQ_CONFIG is already up to date"
+    fi
+
+    assert_bridge_ready
+
+    if command -v dnsmasq >/dev/null 2>&1; then
+        dnsmasq --test
+    fi
+
+    systemctl restart dnsmasq
+    systemctl enable dnsmasq
 }
 
 configure_pve_firewall() {
@@ -232,6 +324,8 @@ install_pve_firewall_rules() {
     rm -f "$tmp"
 }
 
+require_root
+
 ### 1️⃣ CREATE NETWORK BRIDGES ###
 
 echo "[+] Backing up /etc/network/interfaces"
@@ -255,6 +349,7 @@ fi
 
 echo "[+] Reloading network..."
 reload_network_bridge
+assert_bridge_ready
 
 ### 2️⃣ ENABLE IP FORWARDING ###
 
@@ -297,24 +392,7 @@ netfilter-persistent save
 
 ### 4️⃣ DNS CONFIGURATION ###
 
-echo "[+] Setting up DNS forwarding"
-# Install dnsmasq for DNS forwarding (optional but recommended)
-apt-get install -y dnsmasq
-
-# Configure dnsmasq for the custom networks
-cat <<EOF >/etc/dnsmasq.d/proxmox-networks.conf
-# DNS and DHCP for Homelab Network
-interface=$VM_BRIDGE
-bind-interfaces
-dhcp-range=$VM_BRIDGE,$DHCP_START,$DHCP_END,24h
-dhcp-option=$VM_BRIDGE,3,$GATEWAY_IP
-dhcp-option=$VM_BRIDGE,6,$GATEWAY_IP
-server=1.1.1.1
-server=1.0.0.1
-EOF
-
-systemctl restart dnsmasq
-systemctl enable dnsmasq
+configure_dnsmasq
 
 ### 5️⃣ STATIC IP HINTS ###
 

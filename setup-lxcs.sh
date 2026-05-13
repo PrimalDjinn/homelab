@@ -371,6 +371,7 @@ address=/$HEADSCALE_DOMAIN/$PROXY_IP
 address=/$HEADPLANE_DOMAIN/$PROXY_IP
 EOF
 
+    dnsmasq --test
     systemctl restart dnsmasq
 }
 

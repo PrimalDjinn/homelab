@@ -11,63 +11,72 @@ fi
 
 HOSTS_FILE='/etc/hosts'
 
-check_hosts() {
-    grep -q "$(get_ip)" "$HOSTS_FILE"
+host_ip() {
+    local ip
+
+    ip="$(ip route get 1.1.1.1 2>/dev/null | awk '/src/ { for (i = 1; i <= NF; i++) if ($i == "src") { print $(i + 1); exit } }')"
+    if [[ -z "$ip" ]]; then
+        ip="$(get_ip)"
+    fi
+
+    echo "$ip"
 }
 
-remove_host() {
-    local name="$1"
-    local tmp
-    
-    if [[ -z "$name" ]]; then
-        echo "remove_host requires a hostname" >&2
-        return 1
-    fi
-    
-    tmp="$(mktemp)"
-    
-    awk -v name="$name" '
-    {
-        keep = 1
+ensure_proxmox_hostname_mapping() {
+    local ip node legacy_alias tmp
 
-        for (i = 2; i <= NF; i++) {
-            if ($i == name) {
-                keep = 0
+    ip="$(host_ip)"
+    node="$(hostname)"
+    legacy_alias="$node-server"
+    tmp="$(mktemp)"
+
+    cp "$HOSTS_FILE" "$HOSTS_FILE.bak"
+    awk -v node="$node" -v legacy_alias="$legacy_alias" '
+        {
+            out = $1
+            fields = 1
+            for (i = 2; i <= NF; i++) {
+                if ($i != node && $i != legacy_alias) {
+                    out = out " " $i
+                    fields++
+                }
+            }
+            if (fields > 1 || $1 ~ /^127\.|^::1$|^ff02::/) {
+                print out
             }
         }
-
-        if (keep) {
-            print
-        }
-    }' "$HOSTS_FILE" > "$tmp"
-    
-    cp "$HOSTS_FILE" "$HOSTS_FILE.bak"
+    ' "$HOSTS_FILE" > "$tmp"
+    printf '%s %s %s\n' "$ip" "$node" "$legacy_alias" >> "$tmp"
     cat "$tmp" > "$HOSTS_FILE"
     rm -f "$tmp"
 }
 
-add_host() {
-    local ip
-    local name
-    
-    ip="$(get_ip)"
-    
-    if [[ -z "${SERVER_HOST:-}" ]]; then
-        name="$(hostname)-server"
-    else
-        name="$SERVER_HOST"
-    fi
-    
-    echo "$ip $name" >> "$HOSTS_FILE"
+proxmox_hostname_resolves() {
+    local node ip
+
+    node="$(hostname)"
+    ip="$(getent hosts "$node" | awk '{ print $1; exit }')"
+    [[ -n "$ip" && "$ip" != 127.* && "$ip" != "::1" ]]
 }
 
 prepare() {
-    # It's recommended to remove the hostname from that record if unsure
-    # as this avoids any ambiguity.
-    remove_host "$(hostname)"
-    
-    if ! check_hosts; then
-        add_host
+    ensure_proxmox_hostname_mapping
+    proxmox_hostname_resolves || error "Hostname $(hostname) does not resolve to a non-loopback IP after updating $HOSTS_FILE"
+}
+
+refresh_proxmox_runtime() {
+    if ! proxmox_installed; then
+        return
+    fi
+
+    systemctl restart pve-cluster || warn "Could not restart pve-cluster"
+    if [[ -d /etc/pve/nodes ]]; then
+        if command -v pvecm >/dev/null 2>&1; then
+            pvecm updatecerts --force || warn "Could not refresh Proxmox certificates"
+        fi
+        systemctl restart pvedaemon pveproxy pvestatd || warn "Could not restart all Proxmox API/UI services"
+    else
+        warn "/etc/pve/nodes is still unavailable after restarting pve-cluster"
     fi
 }
 
@@ -165,6 +174,7 @@ install() {
 }
 
 complete_install() {
+    prepare
     DEBIAN_FRONTEND=noninteractive apt install -y proxmox-ve postfix open-iscsi chrony
     apt remove -y linux-image-amd64 'linux-image-6.1*'
     update-grub
@@ -172,6 +182,7 @@ complete_install() {
     free_mail_ports
     rm -f /etc/apt/sources.list.d/pve-install-repo.list
     fix_proxmox_repos
+    refresh_proxmox_runtime
     rm -f "$PENDING_FILE"
     touch "$DONE_FILE"
 }
@@ -186,7 +197,9 @@ elif [[ -f "$PENDING_FILE" ]]; then
     complete_install
 elif proxmox_installed; then
     require_root
+    prepare
     info "Proxmox is already installed; skipping Debian-to-Proxmox install."
+    refresh_proxmox_runtime
     mkdir -p "$STATE_DIR"
     touch "$DONE_FILE"
 elif [[ -f "$DONE_FILE" ]]; then

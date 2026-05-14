@@ -45,6 +45,9 @@ Usage:
 Default reset removes homelab service LXCs, generated state, secrets, and
 public 80/443 DNAT rules to the proxy LXC.
 
+Reset does not repair an incomplete or unhealthy Proxmox installation. If
+/etc/pve/nodes is missing, recover pve-cluster first; see README.
+
 Options:
   --network   Also remove vmbr10 from /etc/network/interfaces and internal NAT rules.
   --proxmox   Also clear Proxmox setup markers and restore /etc/hosts backup if present.

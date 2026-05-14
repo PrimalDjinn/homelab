@@ -14,6 +14,8 @@ sudo ./main.sh --all
 
 After provisioning, read `/root/homelab/access.txt` on the Proxmox host for initial credentials, DNS records, Nginx Proxy Manager routes, and the generated `tailscale up` command.
 
+Headscale keeps its public server URL as `https://headscale.<domain>`. Internal service-to-service traffic uses direct internal addresses, for example Headplane talks to `http://headscale:8080` and the proxy LXC joins Headscale through `http://<headscale-lxc-ip>:8080`.
+
 During testing, reset managed service resources with:
 
 ```sh
@@ -21,3 +23,46 @@ sudo ./reset.sh --yes
 ```
 
 Add `--network` to remove the internal bridge/NAT/dnsmasq config, and `--proxmox` to clear Proxmox setup markers and restore `/etc/hosts` from the setup backup.
+
+## Troubleshooting: Proxmox installed but `/etc/pve` is unavailable
+
+The scripts need Proxmox to be both installed and operational. A host can reach an inconsistent state where Proxmox packages are installed, so `setup-proxmox.sh` reports that Proxmox is already installed, but the Proxmox config filesystem is not mounted:
+
+```text
+Proxmox config filesystem is unavailable at /etc/pve/nodes
+unable to open file '/etc/pve/nodes/<node>/lxc/<id>.conf.tmp...' - No such file or directory
+```
+
+This usually means `pve-cluster`/`pmxcfs` is not healthy. Do not create `/etc/pve/nodes` manually; Proxmox owns that filesystem.
+
+Check the host:
+
+```sh
+sudo systemctl status pve-cluster --no-pager -l
+sudo journalctl -u pve-cluster -n 120 --no-pager
+ls -ld /etc/pve /etc/pve/nodes
+hostname
+hostname -f
+getent hosts "$(hostname)"
+cat /etc/hosts
+```
+
+Try restarting the Proxmox services:
+
+```sh
+sudo systemctl restart pve-cluster
+sudo systemctl restart pvedaemon pveproxy pvestatd
+ls -ld /etc/pve/nodes/$(hostname)/lxc
+```
+
+If `/etc/pve/nodes` still does not appear, complete or repair the Proxmox install before rerunning the homelab scripts:
+
+```sh
+sudo DEBIAN_FRONTEND=noninteractive apt install -y proxmox-ve postfix open-iscsi chrony
+sudo systemctl enable --now pve-cluster pvedaemon pveproxy pvestatd
+sudo systemctl restart pve-cluster
+```
+
+Also verify `/etc/hosts` maps the hostname to a real host IP. Proxmox services can fail when the node hostname cannot resolve cleanly.
+
+`reset.sh` removes homelab-managed LXCs, state, firewall rules, and optionally the internal network, but it does not repair a broken Proxmox installation. Fix `pve-cluster`/`/etc/pve` first, then rerun `sudo ./main.sh --all`.

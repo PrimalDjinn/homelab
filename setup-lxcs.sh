@@ -36,6 +36,9 @@ LE_EMAIL="${LE_EMAIL:-admin@$DOMAIN}"
 AUTH_ADMIN_USER="${AUTH_ADMIN_USER:-admin}"
 NPM_ADMIN_EMAIL="${NPM_ADMIN_EMAIL:-admin@example.com}"
 NPM_DEFAULT_PASSWORD="${NPM_DEFAULT_PASSWORD:-changeme}"
+HEADSCALE_PREAUTH_KEY_EXPIRATION="${HEADSCALE_PREAUTH_KEY_EXPIRATION:-720h}"
+HEADSCALE_PUBLIC_URL="https://$HEADSCALE_DOMAIN"
+HEADSCALE_INTERNAL_URL="http://$HEADSCALE_IP:8080"
 STATE_DIR="${STATE_DIR:-/root/homelab}"
 SECRETS_DIR="$STATE_DIR/secrets"
 GENERATED_DIR="$STATE_DIR/generated"
@@ -84,6 +87,17 @@ pct_exec() {
     local ctid="$1"
     shift
     pct exec "$ctid" -- bash -lc "$*"
+}
+
+wait_for_lxc() {
+    local ctid="$1"
+
+    for _ in $(seq 1 60); do
+        pct_exec "$ctid" "true" >/dev/null 2>&1 && return
+        sleep 2
+    done
+
+    error "LXC $ctid did not become ready in time"
 }
 
 copy_dir_to_lxc() {
@@ -140,6 +154,52 @@ template_storage() {
 
 rootfs_storage() {
     pvesm status --content rootdir | awk 'NR > 1 { print $1; exit }'
+}
+
+lxc_config_file() {
+    local ctid="$1"
+    local config
+
+    config="$(find /etc/pve/nodes -mindepth 3 -maxdepth 3 -path "*/lxc/$ctid.conf" -print -quit 2>/dev/null || true)"
+    if [[ -z "$config" && -f "/etc/pve/lxc/$ctid.conf" ]]; then
+        config="/etc/pve/lxc/$ctid.conf"
+    fi
+
+    echo "$config"
+}
+
+ensure_proxy_tun() {
+    local ctid="$1"
+    local config
+    local changed=false
+
+    mkdir -p /dev/net
+    if [[ ! -c /dev/net/tun ]]; then
+        mknod /dev/net/tun c 10 200
+        chmod 666 /dev/net/tun
+    fi
+
+    config="$(lxc_config_file "$ctid")"
+    [[ -n "$config" ]] || error "Could not find Proxmox config for LXC $ctid"
+
+    if ! grep -q '^lxc.cgroup2.devices.allow: c 10:200 rwm$' "$config"; then
+        echo 'lxc.cgroup2.devices.allow: c 10:200 rwm' >> "$config"
+        changed=true
+    fi
+
+    if ! grep -q '^lxc.mount.entry: /dev/net/tun dev/net/tun none bind,create=file$' "$config"; then
+        echo 'lxc.mount.entry: /dev/net/tun dev/net/tun none bind,create=file' >> "$config"
+        changed=true
+    fi
+
+    if [[ "$changed" == true ]]; then
+        info "Restarting proxy LXC $ctid to enable /dev/net/tun"
+        pct reboot "$ctid" >/dev/null 2>&1 || {
+            pct stop "$ctid" >/dev/null 2>&1 || true
+            pct start "$ctid"
+        }
+        wait_for_lxc "$ctid"
+    fi
 }
 
 ensure_template() {
@@ -319,6 +379,33 @@ wait_for_headscale_container() {
     pct_exec "$ctid" "for i in \$(seq 1 60); do docker exec headscale headscale -c /shared/headscale_config.yaml health >/dev/null 2>&1 && exit 0; sleep 2; done; exit 1"
 }
 
+headscale_preauth_key() {
+    local ctid="$1"
+    local file="$2"
+    local expiration="$3"
+    local key
+
+    pct_exec "$ctid" "docker exec headscale headscale -c /shared/headscale_config.yaml users create admin >/dev/null 2>&1 || true"
+    key="$(pct_exec "$ctid" "docker exec headscale headscale -c /shared/headscale_config.yaml preauthkeys create --user admin --reusable --expiration $(quote "$expiration") 2>/dev/null || true")"
+    [[ -n "$key" ]] || error "Could not create Headscale preauth key"
+    echo "$key" > "$file"
+    chmod 600 "$file"
+    echo "$key"
+}
+
+install_tailscale_proxy_lxc() {
+    local key
+    local key_file="$SECRETS_DIR/headscale-admin-preauth-key"
+
+    key="$(headscale_preauth_key "$HEADSCALE_CTID" "$key_file" "$HEADSCALE_PREAUTH_KEY_EXPIRATION")"
+    ensure_proxy_tun "$PROXY_CTID"
+
+    info "Installing Tailscale client in proxy LXC $PROXY_CTID"
+    pct_exec "$PROXY_CTID" "if ! command -v tailscale >/dev/null 2>&1; then curl -fsSL https://tailscale.com/install.sh | sh; fi"
+    pct_exec "$PROXY_CTID" "systemctl enable --now tailscaled"
+    pct_exec "$PROXY_CTID" "tailscale up --login-server=$(quote "$HEADSCALE_INTERNAL_URL") --authkey=$(quote "$key") --hostname=$(quote "$PROXY_HOSTNAME") --accept-dns=false"
+}
+
 render_headscale_stack() {
     local api_key="${1:-}"
 
@@ -326,9 +413,9 @@ render_headscale_stack() {
     export HEADSCALE_VERSION="${HEADSCALE_VERSION:-0.28.0}"
     export HEADPLANE_VERSION="${HEADPLANE_VERSION:-latest}"
     export HEADSCALE_URL="http://headscale:8080"
-    export HEADSCALE_PUBLIC_URL="https://$HEADSCALE_DOMAIN"
+    export HEADSCALE_PUBLIC_URL
     export HEADPLANE_SERVER__BASE_URL="https://$HEADPLANE_DOMAIN"
-    export SERVER_URL="https://$HEADSCALE_DOMAIN"
+    export SERVER_URL="$HEADSCALE_PUBLIC_URL"
     export DNS_BASE_DOMAIN="tailnet.$DOMAIN"
     export HEADSCALE_OIDC_CLIENT_SECRET
     export HEADPLANE_SERVER__COOKIE_SECRET
@@ -376,14 +463,7 @@ install_headscale_lxc() {
     pct_exec "$ctid" "cd /opt/headscale-stack && docker compose up -d --build"
     wait_for_headscale_container "$ctid"
 
-    if [[ ! -s "$SECRETS_DIR/headscale-admin-preauth-key" ]]; then
-        pct_exec "$ctid" "docker exec headscale headscale -c /shared/headscale_config.yaml users create admin >/dev/null 2>&1 || true"
-        preauth_key="$(pct_exec "$ctid" "docker exec headscale headscale -c /shared/headscale_config.yaml preauthkeys create --user admin --reusable --expiration 24h 2>/dev/null || true")"
-        if [[ -n "$preauth_key" ]]; then
-            echo "$preauth_key" > "$SECRETS_DIR/headscale-admin-preauth-key"
-            chmod 600 "$SECRETS_DIR/headscale-admin-preauth-key"
-        fi
-    fi
+    preauth_key="$(headscale_preauth_key "$ctid" "$SECRETS_DIR/headscale-admin-preauth-key" "$HEADSCALE_PREAUTH_KEY_EXPIRATION")"
 }
 
 configure_host_dnat() {
@@ -465,14 +545,16 @@ Authelia:
 - Initial password: $(cat "$SECRETS_DIR/authelia-admin-password")
 
 Headscale:
-- URL: https://$HEADSCALE_DOMAIN
-- Login command: tailscale up --login-server=https://$HEADSCALE_DOMAIN
+- URL: $HEADSCALE_PUBLIC_URL
+- Login command: tailscale up --login-server=$HEADSCALE_PUBLIC_URL
 EOF
 
     if [[ -n "$preauth_key" ]]; then
         cat >> "$STATE_DIR/access.txt" <<EOF
-- Optional reusable 24h pre-auth command:
-  tailscale up --login-server=https://$HEADSCALE_DOMAIN --authkey=$preauth_key
+- Reusable pre-auth command for your PC:
+  tailscale up --login-server=$HEADSCALE_PUBLIC_URL --authkey=$preauth_key
+- Proxy admin over tailnet after your PC joins:
+  http://$PROXY_HOSTNAME.tailnet.$DOMAIN:81
 EOF
     fi
 
@@ -502,6 +584,7 @@ main() {
     install_proxy_lxc "$PROXY_CTID"
     install_auth_lxc "$AUTH_CTID"
     install_headscale_lxc "$HEADSCALE_CTID"
+    install_tailscale_proxy_lxc
     seed_npm_proxy_hosts
     configure_host_dnat
     configure_internal_dns

@@ -59,7 +59,9 @@ ensure_proxmox_hostname_mapping() {
     legacy_alias="$node-server"
     tmp="$(mktemp)"
 
-    cp "$HOSTS_FILE" "$HOSTS_FILE.bak"
+    if [[ ! -f "$HOSTS_FILE.bak" ]]; then
+        cp "$HOSTS_FILE" "$HOSTS_FILE.bak"
+    fi
     awk -v node="$node" -v legacy_alias="$legacy_alias" '
         {
             out = $1

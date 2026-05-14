@@ -19,6 +19,7 @@ NETWORK_CIDR="${HOMELAB_NETWORK_CIDR:-$NETWORK_PREFIX.0/24}"
 ENABLE_PVE_FIREWALL="${HOMELAB_ENABLE_PVE_FIREWALL:-true}"
 WIREGUARD_PORT="${WIREGUARD_PORT:-51820}"
 TAILSCALE_WIREGUARD_PORT="${TAILSCALE_WIREGUARD_PORT:-41641}"
+MAIL_PORTS="${MAIL_PORTS:-25 110 143 465 587 993 995 4190}"
 NETWORK_RELOAD_TIMEOUT="${HOMELAB_NETWORK_RELOAD_TIMEOUT:-60}"
 NETWORK_RELOAD_RETRY_INTERVAL="${HOMELAB_NETWORK_RELOAD_RETRY_INTERVAL:-3}"
 DNSMASQ_CONFIG="/etc/dnsmasq.d/proxmox-networks.conf"
@@ -228,6 +229,9 @@ IN ACCEPT -p tcp -i $VM_BRIDGE -dport 53 -log nolog # HOMELAB internal DNS
 IN ACCEPT -p udp -i $VM_BRIDGE -dport 53 -log nolog # HOMELAB internal DNS
 IN ACCEPT -p udp -i $VM_BRIDGE -dport 67 -log nolog # HOMELAB internal DHCP
 EOF
+    for port in $MAIL_PORTS; do
+        echo "IN ACCEPT -p tcp -dport $port -log nolog # HOMELAB mail port $port" >> "$rules_file"
+    done
 
     install_pve_firewall_rules "$firewall_file" "$rules_file"
     rm -f "$rules_file"

@@ -10,9 +10,11 @@ def env(name: str) -> str:
     return os.environ.get(name, "")
 
 
-def proxy_payload(domain: str, host: str, port: int) -> dict:
+def proxy_payload(domain: str | list[str], host: str, port: int) -> dict:
+    domains = [domain] if isinstance(domain, str) else domain
+    domains = [item for item in domains if item]
     return {
-        "domain_names": [domain],
+        "domain_names": domains,
         "forward_scheme": "http",
         "forward_host": host,
         "forward_port": port,
@@ -47,6 +49,16 @@ def main() -> None:
         "auth": proxy_payload(env("AUTH_DOMAIN"), env("AUTH_IP"), 9091),
         "headscale": proxy_payload(env("HEADSCALE_DOMAIN"), env("HEADSCALE_IP"), 8080),
         "headplane": proxy_payload(env("HEADPLANE_DOMAIN"), env("HEADSCALE_IP"), 3000),
+        "mail": proxy_payload(
+            [
+                env("MAIL_DOMAIN"),
+                env("AUTODISCOVER_DOMAIN"),
+                env("AUTOCONFIG_DOMAIN"),
+                env("MTA_STS_DOMAIN"),
+            ],
+            env("MAIL_IP"),
+            8080,
+        ),
     }
     for name, payload in hosts.items():
         (dest / f"{name}.json").write_text(json.dumps(payload, indent=2) + "\n")

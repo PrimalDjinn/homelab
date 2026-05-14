@@ -4,16 +4,24 @@ set -euo pipefail
 NPM_URL="${NPM_URL:-http://127.0.0.1:81}"
 NPM_EMAIL="${NPM_EMAIL:?NPM_EMAIL is required}"
 NPM_PASSWORD="${NPM_PASSWORD:?NPM_PASSWORD is required}"
-LE_EMAIL="${LE_EMAIL:?LE_EMAIL is required}"
 AUTH_DOMAIN="${AUTH_DOMAIN:?AUTH_DOMAIN is required}"
 HEADSCALE_DOMAIN="${HEADSCALE_DOMAIN:?HEADSCALE_DOMAIN is required}"
 HEADPLANE_DOMAIN="${HEADPLANE_DOMAIN:?HEADPLANE_DOMAIN is required}"
+MAIL_DOMAIN="${MAIL_DOMAIN:-}"
+AUTODISCOVER_DOMAIN="${AUTODISCOVER_DOMAIN:-}"
+AUTOCONFIG_DOMAIN="${AUTOCONFIG_DOMAIN:-}"
+MTA_STS_DOMAIN="${MTA_STS_DOMAIN:-}"
 NPM_DNS_CHALLENGE_PROVIDER="${NPM_DNS_CHALLENGE_PROVIDER:-cloudflare}"
 NPM_DNS_PROPAGATION_SECONDS="${NPM_DNS_PROPAGATION_SECONDS:-60}"
 NPM_SKIP_CLOUDFLARE_DNS_TOKEN="${NPM_SKIP_CLOUDFLARE_DNS_TOKEN:-false}"
 CLOUDFLARE_DNS_API_TOKEN="${CLOUDFLARE_DNS_API_TOKEN:-}"
 
 api_body=""
+CERT_DOMAINS=("$AUTH_DOMAIN" "$HEADSCALE_DOMAIN" "$HEADPLANE_DOMAIN")
+for domain in "$MAIL_DOMAIN" "$AUTODISCOVER_DOMAIN" "$AUTOCONFIG_DOMAIN" "$MTA_STS_DOMAIN"; do
+    [[ -n "$domain" ]] && CERT_DOMAINS+=("$domain")
+done
+cert_domains_json="$(printf '%s\n' "${CERT_DOMAINS[@]}" | jq -R . | jq -s 'unique')"
 
 truthy() {
     case "${1,,}" in
@@ -70,12 +78,10 @@ if [[ -z "$token" ]]; then
 fi
 
 domain_filter='
-    def has_domain($name): (.domain_names // []) | index($name);
     map(select(
-        .provider == "letsencrypt"
-        and has_domain($auth)
-        and has_domain($headscale)
-        and has_domain($headplane)
+        . as $cert
+        | $cert.provider == "letsencrypt"
+        and ([$domains[] | (($cert.domain_names // []) | index(.))] | all)
     ))
     | sort_by(.id)
     | last
@@ -85,9 +91,7 @@ domain_filter='
 cert_id="$(
     api GET /api/nginx/certificates "$token" |
         jq -r \
-            --arg auth "$AUTH_DOMAIN" \
-            --arg headscale "$HEADSCALE_DOMAIN" \
-            --arg headplane "$HEADPLANE_DOMAIN" \
+            --argjson domains "$cert_domains_json" \
             "$domain_filter"
 )"
 
@@ -100,20 +104,15 @@ if [[ -z "$cert_id" ]]; then
 
         cert_payload="$(
             jq -nc \
-                --arg email "$LE_EMAIL" \
-                --arg d1 "$AUTH_DOMAIN" \
-                --arg d2 "$HEADSCALE_DOMAIN" \
-                --arg d3 "$HEADPLANE_DOMAIN" \
+                --argjson domains "$cert_domains_json" \
                 --arg provider "$NPM_DNS_CHALLENGE_PROVIDER" \
                 --arg credentials "# Cloudflare API token"$'\n'"dns_cloudflare_api_token = $CLOUDFLARE_DNS_API_TOKEN" \
                 --argjson propagation "$NPM_DNS_PROPAGATION_SECONDS" \
                 '{
                     provider: "letsencrypt",
                     nice_name: "homelab services",
-                    domain_names: [$d1, $d2, $d3],
+                    domain_names: $domains,
                     meta: {
-                        letsencrypt_email: $email,
-                        letsencrypt_agree: true,
                         dns_challenge: true,
                         dns_provider: $provider,
                         dns_provider_credentials: $credentials,
@@ -124,17 +123,12 @@ if [[ -z "$cert_id" ]]; then
     else
         cert_payload="$(
             jq -nc \
-                --arg email "$LE_EMAIL" \
-                --arg d1 "$AUTH_DOMAIN" \
-                --arg d2 "$HEADSCALE_DOMAIN" \
-                --arg d3 "$HEADPLANE_DOMAIN" \
+                --argjson domains "$cert_domains_json" \
                 '{
                     provider: "letsencrypt",
                     nice_name: "homelab services",
-                    domain_names: [$d1, $d2, $d3],
+                    domain_names: $domains,
                     meta: {
-                        letsencrypt_email: $email,
-                        letsencrypt_agree: true,
                         dns_challenge: false
                     }
                 }'
@@ -148,7 +142,7 @@ if [[ -z "$cert_id" ]]; then
 fi
 
 hosts="$(api GET /api/nginx/proxy-hosts "$token")"
-for domain in "$AUTH_DOMAIN" "$HEADSCALE_DOMAIN" "$HEADPLANE_DOMAIN"; do
+for domain in "${CERT_DOMAINS[@]}"; do
     host="$(
         printf '%s' "$hosts" |
             jq -c --arg domain "$domain" '.[] | select((.domain_names // []) | index($domain))' |

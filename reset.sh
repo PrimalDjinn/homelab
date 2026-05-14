@@ -16,7 +16,10 @@ NETWORK_CIDR="${HOMELAB_NETWORK_CIDR:-$NETWORK_PREFIX.0/24}"
 PROXY_CTID="${PROXY_CTID:-110}"
 AUTH_CTID="${AUTH_CTID:-111}"
 HEADSCALE_CTID="${HEADSCALE_CTID:-112}"
+MAIL_CTID="${MAIL_CTID:-113}"
 PROXY_IP="${PROXY_IP:-$NETWORK_PREFIX.10}"
+MAIL_IP="${MAIL_IP:-$NETWORK_PREFIX.40}"
+MAIL_PORTS="${MAIL_PORTS:-25 110 143 465 587 993 995 4190}"
 VM_BRIDGE="${HOMELAB_BRIDGE:-vmbr10}"
 STATE_DIR="${STATE_DIR:-/root/homelab}"
 PROXMOX_STATE_DIR="/var/lib/homelab"
@@ -43,7 +46,7 @@ Usage:
   sudo ./reset.sh [--yes] [--network] [--proxmox]
 
 Default reset removes homelab service LXCs, generated state, secrets, and
-public 80/443 DNAT rules to the proxy LXC.
+public proxy/mail DNAT rules to the managed LXCs.
 
 Reset does not repair an incomplete or unhealthy Proxmox installation. If
 /etc/pve/nodes is missing, recover pve-cluster first; see README.
@@ -69,9 +72,10 @@ confirm() {
     cat <<EOF
 This will remove homelab-managed test resources:
 
-- LXCs: $PROXY_CTID, $AUTH_CTID, $HEADSCALE_CTID
+- LXCs: $PROXY_CTID, $AUTH_CTID, $HEADSCALE_CTID, $MAIL_CTID
 - State/secrets: $STATE_DIR
 - DNAT/FORWARD rules forwarding public 80/443 to $PROXY_IP
+- DNAT/FORWARD rules forwarding public mail ports to $MAIL_IP
 
 Optional:
 - Reset network bridge/rules: $RESET_NETWORK
@@ -129,6 +133,26 @@ cleanup_public_proxy_rules() {
     delete_iptables_rule nat PREROUTING -p tcp --dport 443 -j DNAT --to-destination "$PROXY_IP:443"
     delete_iptables_rule filter FORWARD -p tcp -d "$PROXY_IP" --dport 80 -j ACCEPT
     delete_iptables_rule filter FORWARD -p tcp -d "$PROXY_IP" --dport 443 -j ACCEPT
+}
+
+cleanup_public_mail_rules() {
+    local main_interface port
+
+    if ! command -v iptables >/dev/null 2>&1; then
+        warn "iptables not found; skipping mail firewall reset"
+        return
+    fi
+
+    main_interface="$(ip route | awk '/default/ { print $5; exit }')"
+
+    info "Removing public mail DNAT/FORWARD rules for $MAIL_IP"
+    for port in $MAIL_PORTS; do
+        if [[ -n "$main_interface" ]]; then
+            delete_iptables_rule nat PREROUTING -i "$main_interface" -p tcp --dport "$port" -j DNAT --to-destination "$MAIL_IP:$port"
+        fi
+        delete_iptables_rule nat PREROUTING -p tcp --dport "$port" -j DNAT --to-destination "$MAIL_IP:$port"
+        delete_iptables_rule filter FORWARD -p tcp -d "$MAIL_IP" --dport "$port" -j ACCEPT
+    done
 }
 
 cleanup_network_rules() {
@@ -202,6 +226,10 @@ persist_firewall() {
 }
 
 cleanup_state() {
+    if [[ -z "$STATE_DIR" || "$STATE_DIR" == "/" || "$STATE_DIR" == "/root" || "$STATE_DIR" == "/var" || "$STATE_DIR" == "/var/lib" ]]; then
+        error "Refusing to remove unsafe STATE_DIR: $STATE_DIR"
+    fi
+
     info "Removing generated homelab state at $STATE_DIR"
     rm -rf "$STATE_DIR"
 }
@@ -259,7 +287,9 @@ confirm
 remove_lxc "$PROXY_CTID"
 remove_lxc "$AUTH_CTID"
 remove_lxc "$HEADSCALE_CTID"
+remove_lxc "$MAIL_CTID"
 cleanup_public_proxy_rules
+cleanup_public_mail_rules
 cleanup_pve_firewall_rules
 cleanup_service_dns
 

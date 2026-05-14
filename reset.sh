@@ -24,6 +24,7 @@ VM_BRIDGE="${HOMELAB_BRIDGE:-vmbr10}"
 STATE_DIR="${STATE_DIR:-/root/homelab}"
 PROXMOX_STATE_DIR="/var/lib/homelab"
 HOSTS_FILE="/etc/hosts"
+SYSCTL_CONFIG="/etc/sysctl.d/99-homelab-ip-forward.conf"
 
 ASSUME_YES=false
 RESET_PROXMOX=false
@@ -219,6 +220,13 @@ cleanup_network_dns() {
     fi
 }
 
+cleanup_network_sysctl() {
+    if [[ -f "$SYSCTL_CONFIG" ]]; then
+        info "Removing homelab IP forwarding sysctl config"
+        rm -f "$SYSCTL_CONFIG"
+    fi
+}
+
 persist_firewall() {
     if command -v netfilter-persistent >/dev/null 2>&1; then
         netfilter-persistent save
@@ -297,6 +305,7 @@ if [[ "$RESET_NETWORK" == true ]]; then
     cleanup_network_rules
     cleanup_bridge
     cleanup_network_dns
+    cleanup_network_sysctl
 fi
 
 persist_firewall

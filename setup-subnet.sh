@@ -23,6 +23,7 @@ MAIL_PORTS="${MAIL_PORTS:-25 110 143 465 587 993 995 4190}"
 NETWORK_RELOAD_TIMEOUT="${HOMELAB_NETWORK_RELOAD_TIMEOUT:-60}"
 NETWORK_RELOAD_RETRY_INTERVAL="${HOMELAB_NETWORK_RELOAD_RETRY_INTERVAL:-3}"
 DNSMASQ_CONFIG="/etc/dnsmasq.d/proxmox-networks.conf"
+SYSCTL_CONFIG="/etc/sysctl.d/99-homelab-ip-forward.conf"
 
 require_root() {
     if [[ $EUID -ne 0 ]]; then
@@ -147,6 +148,24 @@ write_if_changed() {
     cp "$source" "$destination"
     rm -f "$source"
     return 0
+}
+
+enable_ip_forwarding() {
+    local tmp
+
+    tmp="$(mktemp)"
+    cat > "$tmp" <<EOF
+# Managed by homelab setup-subnet.sh.
+net.ipv4.ip_forward = 1
+EOF
+
+    if write_if_changed "$SYSCTL_CONFIG" "$tmp"; then
+        echo "[+] Wrote $SYSCTL_CONFIG"
+    else
+        echo "[+] $SYSCTL_CONFIG is already up to date"
+    fi
+
+    sysctl -w net.ipv4.ip_forward=1 >/dev/null
 }
 
 configure_dnsmasq() {
@@ -375,8 +394,7 @@ assert_bridge_ready
 ### 2️⃣ ENABLE IP FORWARDING ###
 
 echo "[+] Enabling IP forwarding"
-sed -i 's/^#*net.ipv4.ip_forward.*/net.ipv4.ip_forward=1/' /etc/sysctl.conf
-sysctl -p
+enable_ip_forwarding
 
 ### 3️⃣ FIREWALL RULES ###
 

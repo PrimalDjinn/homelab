@@ -384,10 +384,13 @@ headscale_preauth_key() {
     local file="$2"
     local expiration="$3"
     local key
+    local user_id
 
     info "Creating reusable Headscale pre-auth key"
     pct_exec "$ctid" "docker exec headscale headscale -c /shared/headscale_config.yaml users create admin >/dev/null 2>&1 || true"
-    key="$(pct_exec "$ctid" "docker exec headscale headscale -c /shared/headscale_config.yaml preauthkeys create --user admin --reusable --expiration $(quote "$expiration")")"
+    user_id="$(pct_exec "$ctid" "docker exec headscale headscale -c /shared/headscale_config.yaml users list -o json | jq -r '.[] | select(.name == \"admin\") | .id' | head -n1")"
+    [[ -n "$user_id" && "$user_id" != "null" ]] || error "Could not find Headscale user ID for admin"
+    key="$(pct_exec "$ctid" "docker exec headscale headscale -c /shared/headscale_config.yaml preauthkeys create --user $(quote "$user_id") --reusable --expiration $(quote "$expiration")")"
     [[ -n "$key" ]] || error "Could not create Headscale pre-auth key"
     echo "$key" > "$file"
     chmod 600 "$file"

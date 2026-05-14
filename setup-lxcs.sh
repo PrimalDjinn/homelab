@@ -385,19 +385,20 @@ headscale_preauth_key() {
     local expiration="$3"
     local key
 
+    info "Creating reusable Headscale pre-auth key"
     pct_exec "$ctid" "docker exec headscale headscale -c /shared/headscale_config.yaml users create admin >/dev/null 2>&1 || true"
-    key="$(pct_exec "$ctid" "docker exec headscale headscale -c /shared/headscale_config.yaml preauthkeys create --user admin --reusable --expiration $(quote "$expiration") 2>/dev/null || true")"
-    [[ -n "$key" ]] || error "Could not create Headscale preauth key"
+    key="$(pct_exec "$ctid" "docker exec headscale headscale -c /shared/headscale_config.yaml preauthkeys create --user admin --reusable --expiration $(quote "$expiration")")"
+    [[ -n "$key" ]] || error "Could not create Headscale pre-auth key"
     echo "$key" > "$file"
     chmod 600 "$file"
-    echo "$key"
 }
 
 install_tailscale_proxy_lxc() {
     local key
     local key_file="$SECRETS_DIR/headscale-admin-preauth-key"
 
-    key="$(headscale_preauth_key "$HEADSCALE_CTID" "$key_file" "$HEADSCALE_PREAUTH_KEY_EXPIRATION")"
+    headscale_preauth_key "$HEADSCALE_CTID" "$key_file" "$HEADSCALE_PREAUTH_KEY_EXPIRATION"
+    key="$(cat "$key_file")"
     ensure_proxy_tun "$PROXY_CTID"
 
     info "Installing Tailscale client in proxy LXC $PROXY_CTID"
@@ -463,7 +464,7 @@ install_headscale_lxc() {
     pct_exec "$ctid" "cd /opt/headscale-stack && docker compose up -d --build"
     wait_for_headscale_container "$ctid"
 
-    preauth_key="$(headscale_preauth_key "$ctid" "$SECRETS_DIR/headscale-admin-preauth-key" "$HEADSCALE_PREAUTH_KEY_EXPIRATION")"
+    headscale_preauth_key "$ctid" "$SECRETS_DIR/headscale-admin-preauth-key" "$HEADSCALE_PREAUTH_KEY_EXPIRATION"
 }
 
 configure_host_dnat() {

@@ -11,6 +11,35 @@ fi
 
 HOSTS_FILE='/etc/hosts'
 
+debian_codename() {
+    local codename=""
+
+    if [[ -r /etc/os-release ]]; then
+        # shellcheck disable=SC1091
+        source /etc/os-release
+        codename="${VERSION_CODENAME:-}"
+    fi
+
+    if [[ -z "$codename" ]] && command -v lsb_release >/dev/null 2>&1; then
+        codename="$(lsb_release -sc)"
+    fi
+
+    echo "$codename"
+}
+
+require_supported_debian() {
+    local codename
+
+    codename="$(debian_codename)"
+    case "$codename" in
+        bookworm|trixie)
+            ;;
+        *)
+            error "Unsupported Debian release '$codename'. This installer supports Debian 12 bookworm and Debian 13 trixie."
+            ;;
+    esac
+}
+
 host_ip() {
     local ip
 
@@ -89,13 +118,71 @@ restore_host() {
 }
 
 
+write_pve_no_subscription_repo() {
+    local codename="$1"
+    local sources_dir="${2:-/etc/apt/sources.list.d}"
+
+    case "$codename" in
+        trixie)
+            cat > "$sources_dir/pve-no-subscription.sources" <<EOF
+Types: deb
+URIs: http://download.proxmox.com/debian/pve
+Suites: trixie
+Components: pve-no-subscription
+Signed-By: /usr/share/keyrings/proxmox-archive-keyring.gpg
+EOF
+            rm -f "$sources_dir/pve-no-subscription.list"
+            info "Configured Proxmox VE no-subscription repository for Debian 13 Trixie"
+            ;;
+        bookworm)
+            echo "deb [arch=amd64] http://download.proxmox.com/debian/pve bookworm pve-no-subscription" \
+                > "$sources_dir/pve-no-subscription.list"
+            rm -f "$sources_dir/pve-no-subscription.sources"
+            info "Configured Proxmox VE no-subscription repository for Debian 12 Bookworm"
+            ;;
+        *)
+            error "Unsupported Debian release '$codename' for Proxmox VE repository setup"
+            ;;
+    esac
+}
+
+write_ceph_no_subscription_repo() {
+    local codename="$1"
+    local sources_dir="${2:-/etc/apt/sources.list.d}"
+
+    case "$codename" in
+        trixie)
+            cat > "$sources_dir/ceph-no-subscription.sources" <<EOF
+Types: deb
+URIs: http://download.proxmox.com/debian/ceph-squid
+Suites: trixie
+Components: no-subscription
+Signed-By: /usr/share/keyrings/proxmox-archive-keyring.gpg
+EOF
+            rm -f "$sources_dir/ceph-no-subscription.list"
+            info "Configured Ceph Squid no-subscription repository for Debian 13 Trixie"
+            ;;
+        bookworm)
+            echo "deb http://download.proxmox.com/debian/ceph-reef bookworm no-subscription" \
+                > "$sources_dir/ceph-no-subscription.list"
+            rm -f "$sources_dir/ceph-no-subscription.sources"
+            info "Configured Ceph Reef no-subscription repository for Debian 12 Bookworm"
+            ;;
+        *)
+            error "Unsupported Debian release '$codename' for Ceph repository setup"
+            ;;
+    esac
+}
+
 fix_proxmox_repos() {
     # Disables Proxmox enterprise repos and enables community (no-subscription) repos.
     # Handles both .list and .sources (DEB822) formats.
 
     set -e
+    local codename
     
     [[ $EUID -ne 0 ]] && error "Run as root or with sudo."
+    codename="$(debian_codename)"
 
     SOURCES_DIR="/etc/apt/sources.list.d"
     BACKUP_DIR="/root/apt-sources-backup-$(date +%Y%m%d%H%M%S)"
@@ -118,21 +205,8 @@ fix_proxmox_repos() {
         fi
     done
 
-    if [[ ! -f "$SOURCES_DIR/pve-no-subscription.list" ]]; then
-        echo "deb http://download.proxmox.com/debian/pve bookworm pve-no-subscription" \
-            > "$SOURCES_DIR/pve-no-subscription.list"
-        info "Created pve-no-subscription.list"
-    else
-        info "pve-no-subscription.list already exists, skipping."
-    fi
-
-    if [[ ! -f "$SOURCES_DIR/ceph-no-subscription.list" ]]; then
-        echo "deb http://download.proxmox.com/debian/ceph-reef bookworm no-subscription" \
-            > "$SOURCES_DIR/ceph-no-subscription.list"
-        info "Created ceph-no-subscription.list"
-    else
-        info "ceph-no-subscription.list already exists, skipping."
-    fi
+    write_pve_no_subscription_repo "$codename" "$SOURCES_DIR"
+    write_ceph_no_subscription_repo "$codename" "$SOURCES_DIR"
 
     info "Checking for any remaining active enterprise entries..."
     REMAINING=$(grep -r "^deb https://enterprise.proxmox.com" /etc/apt/ 2>/dev/null || true)
@@ -156,12 +230,46 @@ proxmox_installed() {
     command -v pveversion >/dev/null 2>&1 || dpkg -s proxmox-ve >/dev/null 2>&1
 }
 
+install_pve_repository() {
+    local codename="$1"
+
+    case "$codename" in
+        trixie)
+            cat > /etc/apt/sources.list.d/pve-install-repo.sources <<EOF
+Types: deb
+URIs: http://download.proxmox.com/debian/pve
+Suites: trixie
+Components: pve-no-subscription
+Signed-By: /usr/share/keyrings/proxmox-archive-keyring.gpg
+EOF
+            wget https://enterprise.proxmox.com/debian/proxmox-archive-keyring-trixie.gpg -O /usr/share/keyrings/proxmox-archive-keyring.gpg
+            echo "136673be77aba35dcce385b28737689ad64fd785a797e57897589aed08db6e45  /usr/share/keyrings/proxmox-archive-keyring.gpg" | sha256sum -c -
+            ;;
+        bookworm)
+            echo "deb [arch=amd64] http://download.proxmox.com/debian/pve bookworm pve-no-subscription" > /etc/apt/sources.list.d/pve-install-repo.list
+            wget https://enterprise.proxmox.com/debian/proxmox-release-bookworm.gpg -O /etc/apt/trusted.gpg.d/proxmox-release-bookworm.gpg
+            echo "7da6fe34168adc6e479327ba517796d4702fa2f8b4f0a9833f5ea6e6b48f6507a6da403a274fe201595edc86a84463d50383d07f64bdde2e3658108db7d6dc87  /etc/apt/trusted.gpg.d/proxmox-release-bookworm.gpg" | sha512sum -c -
+            ;;
+        *)
+            error "Unsupported Debian release '$codename' for Proxmox VE installation"
+            ;;
+    esac
+}
+
+debian_kernel_remove_pattern() {
+    case "$(debian_codename)" in
+        trixie) echo 'linux-image-6.12*' ;;
+        bookworm) echo 'linux-image-6.1*' ;;
+        *) echo 'linux-image-6.*' ;;
+    esac
+}
+
 install() {
-    # Add the Proxmox VE repository:
-    echo "deb [arch=amd64] http://download.proxmox.com/debian/pve bookworm pve-no-subscription" > /etc/apt/sources.list.d/pve-install-repo.list
-    wget https://enterprise.proxmox.com/debian/proxmox-release-bookworm.gpg -O /etc/apt/trusted.gpg.d/proxmox-release-bookworm.gpg
-    # verify
-    echo "7da6fe34168adc6e479327ba517796d4702fa2f8b4f0a9833f5ea6e6b48f6507a6da403a274fe201595edc86a84463d50383d07f64bdde2e3658108db7d6dc87  /etc/apt/trusted.gpg.d/proxmox-release-bookworm.gpg" | sha512sum -c -
+    local codename
+
+    require_supported_debian
+    codename="$(debian_codename)"
+    install_pve_repository "$codename"
     apt update && apt -y full-upgrade
     apt install -y proxmox-default-kernel
 
@@ -174,13 +282,17 @@ install() {
 }
 
 complete_install() {
+    local kernel_pattern
+
+    require_supported_debian
     prepare
     DEBIAN_FRONTEND=noninteractive apt install -y proxmox-ve postfix open-iscsi chrony
-    apt remove -y linux-image-amd64 'linux-image-6.1*'
+    kernel_pattern="$(debian_kernel_remove_pattern)"
+    apt remove -y linux-image-amd64 "$kernel_pattern"
     update-grub
     apt remove -y os-prober
     free_mail_ports
-    rm -f /etc/apt/sources.list.d/pve-install-repo.list
+    rm -f /etc/apt/sources.list.d/pve-install-repo.list /etc/apt/sources.list.d/pve-install-repo.sources
     fix_proxmox_repos
     refresh_proxmox_runtime
     rm -f "$PENDING_FILE"

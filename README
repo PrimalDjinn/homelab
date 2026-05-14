@@ -1,6 +1,6 @@
 ## Notes to self
 
-- First is to obviously setup proxmox on a debian *12* vps/vm/wherever - as long as the provider allows virtualisation all should be well see: https://pve.proxmox.com/wiki/Install_Proxmox_VE_on_Debian_12_Bookworm - the script already does this, unless sth changes with the process, just run it and observe 
+- First is to obviously setup Proxmox on a Debian VPS/VM/wherever - as long as the provider allows virtualisation all should be well. The script supports Debian 13 Trixie / Proxmox VE 9 using the current deb822 repository flow from https://pve.proxmox.com/wiki/Install_Proxmox_VE_on_Debian_13_Trixie, while still keeping the Debian 12 Bookworm path for existing hosts.
 - The setup a subnet, most providers will give a single IP, so subnetting for isolation and sharing is crutial
 - Then we set up a reverse proxy LXC using Nginx Proxy Manager for the UI. The Proxmox host forwards public 80/443 to this LXC; service ports stay on the internal bridge.
 - Then we set up an auth LXC using Authelia as the OIDC provider.

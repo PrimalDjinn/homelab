@@ -35,7 +35,12 @@ HEADPLANE_DOMAIN="${HEADPLANE_DOMAIN:-headplane.$DOMAIN}"
 LE_EMAIL="${LE_EMAIL:-admin@$DOMAIN}"
 AUTH_ADMIN_USER="${AUTH_ADMIN_USER:-admin}"
 NPM_ADMIN_EMAIL="${NPM_ADMIN_EMAIL:-admin@example.com}"
-NPM_DEFAULT_PASSWORD="${NPM_DEFAULT_PASSWORD:-changeme}"
+NPM_PASSWORD="${NPM_PASSWORD:-${NPM_DEFAULT_PASSWORD:-changeme}}"
+NPM_DEFAULT_PASSWORD="$NPM_PASSWORD"
+NPM_DNS_CHALLENGE_PROVIDER="${NPM_DNS_CHALLENGE_PROVIDER:-cloudflare}"
+NPM_DNS_PROPAGATION_SECONDS="${NPM_DNS_PROPAGATION_SECONDS:-60}"
+NPM_SKIP_CLOUDFLARE_DNS_TOKEN="${NPM_SKIP_CLOUDFLARE_DNS_TOKEN:-false}"
+CLOUDFLARE_DNS_API_TOKEN="${CLOUDFLARE_DNS_API_TOKEN:-}"
 HEADSCALE_PREAUTH_KEY_EXPIRATION="${HEADSCALE_PREAUTH_KEY_EXPIRATION:-720h}"
 HEADSCALE_PUBLIC_URL="https://$HEADSCALE_DOMAIN"
 HEADSCALE_INTERNAL_URL="http://$HEADSCALE_IP:8080"
@@ -63,6 +68,21 @@ ensure_host_python() {
     fi
 
     error "python3 is required for config rendering and could not be installed automatically."
+}
+
+ensure_host_jq() {
+    if command -v jq >/dev/null 2>&1; then
+        return
+    fi
+
+    if command -v apt-get >/dev/null 2>&1; then
+        info "Installing jq on the Proxmox host for API payload handling"
+        apt-get update
+        DEBIAN_FRONTEND=noninteractive apt-get install -y jq
+        return
+    fi
+
+    error "jq is required for API payload handling and could not be installed automatically."
 }
 
 random_token() {
@@ -113,6 +133,7 @@ require_proxmox() {
     need_cmd pvesm
     need_cmd openssl
     ensure_host_python
+    ensure_host_jq
     require_pve_config_fs
 }
 
@@ -330,6 +351,22 @@ seed_npm_proxy_hosts() {
     done
 }
 
+configure_npm_lets_encrypt() {
+    local ctid="$PROXY_CTID"
+
+    info "Trying to request and attach Nginx Proxy Manager Let's Encrypt certificate"
+    pct_exec "$ctid" "for i in \$(seq 1 60); do curl -fsS http://127.0.0.1:81/api >/dev/null 2>&1 && exit 0; sleep 2; done; exit 1" || {
+        warn "Nginx Proxy Manager API was not ready; request the Let's Encrypt certificate manually in the UI."
+        return
+    }
+
+    pct push "$ctid" "$SERVICES_DIR/proxy/configure-npm-ssl.sh" /tmp/configure-npm-ssl.sh
+    pct_exec "$ctid" "chmod +x /tmp/configure-npm-ssl.sh && NPM_URL=http://127.0.0.1:81 NPM_EMAIL=$(quote "$NPM_ADMIN_EMAIL") NPM_PASSWORD=$(quote "$NPM_PASSWORD") LE_EMAIL=$(quote "$LE_EMAIL") AUTH_DOMAIN=$(quote "$AUTH_DOMAIN") HEADSCALE_DOMAIN=$(quote "$HEADSCALE_DOMAIN") HEADPLANE_DOMAIN=$(quote "$HEADPLANE_DOMAIN") NPM_DNS_CHALLENGE_PROVIDER=$(quote "$NPM_DNS_CHALLENGE_PROVIDER") NPM_DNS_PROPAGATION_SECONDS=$(quote "$NPM_DNS_PROPAGATION_SECONDS") NPM_SKIP_CLOUDFLARE_DNS_TOKEN=$(quote "$NPM_SKIP_CLOUDFLARE_DNS_TOKEN") CLOUDFLARE_DNS_API_TOKEN=$(quote "$CLOUDFLARE_DNS_API_TOKEN") /tmp/configure-npm-ssl.sh" || {
+        warn "Could not automate NPM Let's Encrypt setup. Set CLOUDFLARE_DNS_API_TOKEN for Cloudflare DNS-01, or set NPM_SKIP_CLOUDFLARE_DNS_TOKEN=true to force HTTP-01 with DNS-only records and public port 80."
+        return
+    }
+}
+
 install_auth_lxc() {
     local ctid="$1"
     local admin_password oidc_secret jwt_secret session_secret storage_key hmac_secret
@@ -528,7 +565,6 @@ LXC layout:
 - Headscale + Headplane: $HEADSCALE_CTID $HEADSCALE_IP ($HEADSCALE_HOSTNAME)
 
 Public DNS records to create:
-- $PROXY_DOMAIN -> $(get_ip)
 - $AUTH_DOMAIN -> $(get_ip)
 - $HEADSCALE_DOMAIN -> $(get_ip)
 - $HEADPLANE_DOMAIN -> $(get_ip)
@@ -591,6 +627,7 @@ main() {
     install_tailscale_proxy_lxc
     seed_npm_proxy_hosts
     configure_host_dnat
+    configure_npm_lets_encrypt
     configure_internal_dns
     write_summary
 }

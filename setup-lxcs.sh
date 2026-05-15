@@ -23,18 +23,23 @@ PROXY_CTID="${PROXY_CTID:-110}"
 AUTH_CTID="${AUTH_CTID:-111}"
 HEADSCALE_CTID="${HEADSCALE_CTID:-112}"
 MAIL_CTID="${MAIL_CTID:-113}"
+OPENPANEL_CTID="${OPENPANEL_CTID:-114}"
 PROXY_IP="${PROXY_IP:-$NETWORK_PREFIX.10}"
 AUTH_IP="${AUTH_IP:-$NETWORK_PREFIX.20}"
 HEADSCALE_IP="${HEADSCALE_IP:-$NETWORK_PREFIX.30}"
 MAIL_IP="${MAIL_IP:-$NETWORK_PREFIX.40}"
+OPENPANEL_IP="${OPENPANEL_IP:-$NETWORK_PREFIX.50}"
 PROXY_HOSTNAME="${PROXY_HOSTNAME:-homelab-proxy}"
 AUTH_HOSTNAME="${AUTH_HOSTNAME:-homelab-auth}"
 HEADSCALE_HOSTNAME="${HEADSCALE_HOSTNAME:-homelab-headscale}"
 MAIL_HOSTNAME="${MAIL_HOSTNAME:-homelab-mail}"
+OPENPANEL_HOSTNAME="${OPENPANEL_HOSTNAME:-homelab-openpanel}"
 PROXY_DOMAIN="${PROXY_DOMAIN:-proxy.$DOMAIN}"
 AUTH_DOMAIN="${AUTH_DOMAIN:-auth.$DOMAIN}"
 HEADSCALE_DOMAIN="${HEADSCALE_DOMAIN:-headscale.$DOMAIN}"
 HEADPLANE_DOMAIN="${HEADPLANE_DOMAIN:-headplane.$DOMAIN}"
+OPENPANEL_CLIENT_PANEL_DOMAIN="${OPENPANEL_CLIENT_PANEL_DOMAIN:-openpanel.$DOMAIN}"
+OPENPANEL_ADMIN_DOMAIN="${OPENPANEL_ADMIN_DOMAIN:-openadmin.$DOMAIN}"
 MAIL_DOMAIN="${MAIL_DOMAIN:-mail.$DOMAIN}"
 EMAIL_APP_DOMAIN="${EMAIL_APP_DOMAIN:-email.$DOMAIN}"
 WEBMAIL_DOMAIN="${WEBMAIL_DOMAIN:-webmail.$DOMAIN}"
@@ -62,6 +67,20 @@ MAIL_PORTS="${MAIL_PORTS:-25 110 143 465 587 993 995 4190}"
 HEADSCALE_PREAUTH_KEY_EXPIRATION="${HEADSCALE_PREAUTH_KEY_EXPIRATION:-720h}"
 HEADSCALE_PUBLIC_URL="https://$HEADSCALE_DOMAIN"
 HEADSCALE_INTERNAL_URL="http://$HEADSCALE_IP:8080"
+OPENPANEL_MEMORY_MB="${OPENPANEL_MEMORY_MB:-auto}"
+OPENPANEL_MIN_MEMORY_MB="${OPENPANEL_MIN_MEMORY_MB:-4096}"
+OPENPANEL_MAX_MEMORY_MB="${OPENPANEL_MAX_MEMORY_MB:-16384}"
+OPENPANEL_HOST_RESERVE_MB="${OPENPANEL_HOST_RESERVE_MB:-4096}"
+OPENPANEL_DIAGNOSTIC_VM_RESERVE_MB="${OPENPANEL_DIAGNOSTIC_VM_RESERVE_MB:-8192}"
+OPENPANEL_CORES="${OPENPANEL_CORES:-auto}"
+OPENPANEL_CPU_RESERVE="${OPENPANEL_CPU_RESERVE:-2}"
+OPENPANEL_MAX_CORES="${OPENPANEL_MAX_CORES:-8}"
+OPENPANEL_DISK_GB="${OPENPANEL_DISK_GB:-120}"
+OPENPANEL_PUBLIC_BACKEND_PORT="${OPENPANEL_PUBLIC_BACKEND_PORT:-80}"
+OPENPANEL_CLIENT_PANEL_PORT="${OPENPANEL_CLIENT_PANEL_PORT:-2083}"
+OPENPANEL_CLIENT_PANEL_SCHEME="${OPENPANEL_CLIENT_PANEL_SCHEME:-https}"
+OPENPANEL_NPM_SYNC_INTERVAL_SECONDS="${OPENPANEL_NPM_SYNC_INTERVAL_SECONDS:-60}"
+OPENPANEL_NPM_AUTO_CERTS="${OPENPANEL_NPM_AUTO_CERTS:-false}"
 STATE_DIR="${STATE_DIR:-/root/homelab}"
 SECRETS_DIR="$STATE_DIR/secrets"
 GENERATED_DIR="$STATE_DIR/generated"
@@ -307,6 +326,49 @@ validate_template_ref() {
     fi
 }
 
+clamp_number() {
+    local value="$1" min="$2" max="$3"
+
+    if ((value < min)); then
+        echo "$min"
+    elif ((value > max)); then
+        echo "$max"
+    else
+        echo "$value"
+    fi
+}
+
+host_memory_mb() {
+    awk '/MemTotal:/ { print int($2 / 1024); exit }' /proc/meminfo
+}
+
+resolve_openpanel_memory_mb() {
+    local total reserved available
+
+    if [[ "$OPENPANEL_MEMORY_MB" != "auto" ]]; then
+        echo "$OPENPANEL_MEMORY_MB"
+        return
+    fi
+
+    total="$(host_memory_mb)"
+    reserved=$((OPENPANEL_HOST_RESERVE_MB + OPENPANEL_DIAGNOSTIC_VM_RESERVE_MB + 768 + 768 + 768 + 5120))
+    available=$((total - reserved))
+    clamp_number "$available" "$OPENPANEL_MIN_MEMORY_MB" "$OPENPANEL_MAX_MEMORY_MB"
+}
+
+resolve_openpanel_cores() {
+    local total available
+
+    if [[ "$OPENPANEL_CORES" != "auto" ]]; then
+        echo "$OPENPANEL_CORES"
+        return
+    fi
+
+    total="$(nproc)"
+    available=$((total - OPENPANEL_CPU_RESERVE))
+    clamp_number "$available" 1 "$OPENPANEL_MAX_CORES"
+}
+
 ensure_lxc() {
     local ctid="$1" hostname="$2" ip="$3" memory="$4" cores="$5" disk="$6" template="$7"
     local root_storage root_password
@@ -418,6 +480,59 @@ install_mail_lxc() {
     pct_exec "$ctid" "cd /opt/email-service && docker compose -f ./docker-compose.prod.yml -f ./docker-compose.homelab.yml --env-file .env up -d"
 }
 
+install_openpanel_lxc() {
+    local ctid="$1"
+    local sync_env
+    local sync_timer
+
+    bootstrap_lxc "$ctid"
+    pct_exec "$ctid" "export DEBIAN_FRONTEND=noninteractive; apt-get install -y curl python3"
+
+    info "Installing OpenPanel Community Edition in LXC $ctid"
+    pct push "$ctid" "$SERVICES_DIR/openpanel/install-openpanel.sh" /tmp/install-openpanel.sh
+    pct_exec "$ctid" "chmod +x /tmp/install-openpanel.sh && /tmp/install-openpanel.sh"
+
+    info "Installing OpenPanel to NPM sync timer in LXC $ctid"
+    pct push "$ctid" "$SERVICES_DIR/openpanel/sync_npm_domains.py" /usr/local/bin/sync-openpanel-npm-domains
+    pct push "$ctid" "$SERVICES_DIR/openpanel/sync-npm-domains.service" /etc/systemd/system/sync-npm-domains.service
+    pct_exec "$ctid" "chmod +x /usr/local/bin/sync-openpanel-npm-domains && mkdir -p /etc/homelab"
+
+    sync_timer="$(mktemp)"
+    cat > "$sync_timer" <<EOF
+[Unit]
+Description=Periodic OpenPanel to Nginx Proxy Manager domain sync
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=${OPENPANEL_NPM_SYNC_INTERVAL_SECONDS}s
+AccuracySec=10s
+Unit=sync-npm-domains.service
+
+[Install]
+WantedBy=timers.target
+EOF
+    pct push "$ctid" "$sync_timer" /etc/systemd/system/sync-npm-domains.timer
+    rm -f "$sync_timer"
+
+    sync_env="$(mktemp)"
+    cat > "$sync_env" <<EOF
+NPM_URL=http://$PROXY_IP:81
+NPM_EMAIL=$NPM_LOGIN_EMAIL
+NPM_PASSWORD=$NPM_LOGIN_PASSWORD
+OPENPANEL_IP=$OPENPANEL_IP
+OPENPANEL_CLIENT_PANEL_DOMAIN=$OPENPANEL_CLIENT_PANEL_DOMAIN
+OPENPANEL_ADMIN_DOMAIN=$OPENPANEL_ADMIN_DOMAIN
+OPENPANEL_PUBLIC_BACKEND_PORT=$OPENPANEL_PUBLIC_BACKEND_PORT
+OPENPANEL_CLIENT_PANEL_PORT=$OPENPANEL_CLIENT_PANEL_PORT
+OPENPANEL_CLIENT_PANEL_SCHEME=$OPENPANEL_CLIENT_PANEL_SCHEME
+OPENPANEL_NPM_AUTO_CERTS=$OPENPANEL_NPM_AUTO_CERTS
+EOF
+    chmod 600 "$sync_env"
+    pct push "$ctid" "$sync_env" /etc/homelab/openpanel-npm-sync.env
+    rm -f "$sync_env"
+    pct_exec "$ctid" "chmod 600 /etc/homelab/openpanel-npm-sync.env && systemctl daemon-reload && systemctl enable --now sync-npm-domains.timer"
+}
+
 install_proxy_lxc() {
     local ctid="$1"
     bootstrap_lxc "$ctid"
@@ -522,7 +637,7 @@ seed_npm_proxy_hosts() {
         return
     fi
 
-    export AUTH_DOMAIN AUTH_IP HEADSCALE_DOMAIN HEADSCALE_IP HEADPLANE_DOMAIN
+    export AUTH_DOMAIN AUTH_IP HEADSCALE_DOMAIN HEADSCALE_IP HEADPLANE_DOMAIN OPENPANEL_CLIENT_PANEL_DOMAIN OPENPANEL_IP OPENPANEL_CLIENT_PANEL_PORT OPENPANEL_CLIENT_PANEL_SCHEME
     export MAIL_DOMAIN EMAIL_APP_DOMAIN WEBMAIL_DOMAIN LISTMONK_DOMAIN POSTAL_DOMAIN LIBREDESK_DOMAIN MAIL_IP AUTODISCOVER_DOMAIN AUTOCONFIG_DOMAIN MTA_STS_DOMAIN
     python3 "$SERVICES_DIR/proxy/render-npm-hosts.py" --output-dir "$GENERATED_DIR/npm"
     for payload in "$GENERATED_DIR"/npm/*.json; do
@@ -548,7 +663,7 @@ configure_npm_lets_encrypt() {
     }
 
     pct push "$ctid" "$SERVICES_DIR/proxy/configure-npm-ssl.sh" /tmp/configure-npm-ssl.sh
-    pct_exec "$ctid" "chmod +x /tmp/configure-npm-ssl.sh && NPM_URL=http://127.0.0.1:81 NPM_EMAIL=$(quote "$NPM_LOGIN_EMAIL") NPM_PASSWORD=$(quote "$NPM_LOGIN_PASSWORD") LE_EMAIL=$(quote "$LE_EMAIL") AUTH_DOMAIN=$(quote "$AUTH_DOMAIN") HEADSCALE_DOMAIN=$(quote "$HEADSCALE_DOMAIN") HEADPLANE_DOMAIN=$(quote "$HEADPLANE_DOMAIN") MAIL_DOMAIN=$(quote "$MAIL_DOMAIN") EMAIL_APP_DOMAIN=$(quote "$EMAIL_APP_DOMAIN") WEBMAIL_DOMAIN=$(quote "$WEBMAIL_DOMAIN") LISTMONK_DOMAIN=$(quote "$LISTMONK_DOMAIN") POSTAL_DOMAIN=$(quote "$POSTAL_DOMAIN") LIBREDESK_DOMAIN=$(quote "$LIBREDESK_DOMAIN") AUTODISCOVER_DOMAIN=$(quote "$AUTODISCOVER_DOMAIN") AUTOCONFIG_DOMAIN=$(quote "$AUTOCONFIG_DOMAIN") MTA_STS_DOMAIN=$(quote "$MTA_STS_DOMAIN") NPM_DNS_CHALLENGE_PROVIDER=$(quote "$NPM_DNS_CHALLENGE_PROVIDER") NPM_DNS_PROPAGATION_SECONDS=$(quote "$NPM_DNS_PROPAGATION_SECONDS") NPM_SKIP_CLOUDFLARE_DNS_TOKEN=$(quote "$NPM_SKIP_CLOUDFLARE_DNS_TOKEN") CLOUDFLARE_DNS_API_TOKEN=$(quote "$NPM_CLOUDFLARE_DNS_API_TOKEN") /tmp/configure-npm-ssl.sh" || {
+    pct_exec "$ctid" "chmod +x /tmp/configure-npm-ssl.sh && NPM_URL=http://127.0.0.1:81 NPM_EMAIL=$(quote "$NPM_LOGIN_EMAIL") NPM_PASSWORD=$(quote "$NPM_LOGIN_PASSWORD") LE_EMAIL=$(quote "$LE_EMAIL") AUTH_DOMAIN=$(quote "$AUTH_DOMAIN") HEADSCALE_DOMAIN=$(quote "$HEADSCALE_DOMAIN") HEADPLANE_DOMAIN=$(quote "$HEADPLANE_DOMAIN") OPENPANEL_CLIENT_PANEL_DOMAIN=$(quote "$OPENPANEL_CLIENT_PANEL_DOMAIN") MAIL_DOMAIN=$(quote "$MAIL_DOMAIN") EMAIL_APP_DOMAIN=$(quote "$EMAIL_APP_DOMAIN") WEBMAIL_DOMAIN=$(quote "$WEBMAIL_DOMAIN") LISTMONK_DOMAIN=$(quote "$LISTMONK_DOMAIN") POSTAL_DOMAIN=$(quote "$POSTAL_DOMAIN") LIBREDESK_DOMAIN=$(quote "$LIBREDESK_DOMAIN") AUTODISCOVER_DOMAIN=$(quote "$AUTODISCOVER_DOMAIN") AUTOCONFIG_DOMAIN=$(quote "$AUTOCONFIG_DOMAIN") MTA_STS_DOMAIN=$(quote "$MTA_STS_DOMAIN") NPM_DNS_CHALLENGE_PROVIDER=$(quote "$NPM_DNS_CHALLENGE_PROVIDER") NPM_DNS_PROPAGATION_SECONDS=$(quote "$NPM_DNS_PROPAGATION_SECONDS") NPM_SKIP_CLOUDFLARE_DNS_TOKEN=$(quote "$NPM_SKIP_CLOUDFLARE_DNS_TOKEN") CLOUDFLARE_DNS_API_TOKEN=$(quote "$NPM_CLOUDFLARE_DNS_API_TOKEN") /tmp/configure-npm-ssl.sh" || {
         warn "Could not automate NPM Let's Encrypt setup. Set NPM_CLOUDFLARE_DNS_API_TOKEN or CLOUDFLARE_DNS_API_TOKEN for Cloudflare DNS-01, or set NPM_SKIP_CLOUDFLARE_DNS_TOKEN=true to force HTTP-01 with DNS-only records and public port 80."
         return
     }
@@ -754,6 +869,8 @@ address=/$PROXY_DOMAIN/$PROXY_IP
 address=/$AUTH_DOMAIN/$PROXY_IP
 address=/$HEADSCALE_DOMAIN/$PROXY_IP
 address=/$HEADPLANE_DOMAIN/$PROXY_IP
+address=/$OPENPANEL_CLIENT_PANEL_DOMAIN/$PROXY_IP
+address=/$OPENPANEL_ADMIN_DOMAIN/$OPENPANEL_IP
 address=/$MAIL_DOMAIN/$MAIL_IP
 address=/$EMAIL_APP_DOMAIN/$MAIL_IP
 address=/$WEBMAIL_DOMAIN/$MAIL_IP
@@ -794,11 +911,13 @@ LXC layout:
 - Authelia auth/OIDC: $AUTH_CTID $AUTH_IP ($AUTH_HOSTNAME)
 - Headscale + Headplane: $HEADSCALE_CTID $HEADSCALE_IP ($HEADSCALE_HOSTNAME)
 - Mail/email-service: $MAIL_CTID $MAIL_IP ($MAIL_HOSTNAME)
+- OpenPanel: $OPENPANEL_CTID $OPENPANEL_IP ($OPENPANEL_HOSTNAME)
 
 Public DNS records to create:
 - $AUTH_DOMAIN -> $public_ip
 - $HEADSCALE_DOMAIN -> $public_ip
 - $HEADPLANE_DOMAIN -> $public_ip
+- $OPENPANEL_CLIENT_PANEL_DOMAIN -> $public_ip
 - $MAIL_DOMAIN -> $public_ip
 - $EMAIL_APP_DOMAIN -> $public_ip
 - $WEBMAIL_DOMAIN -> $public_ip
@@ -817,6 +936,7 @@ Nginx Proxy Manager:
   - $AUTH_DOMAIN -> http://$AUTH_IP:9091
   - $HEADSCALE_DOMAIN -> http://$HEADSCALE_IP:8080
   - $HEADPLANE_DOMAIN -> http://$HEADSCALE_IP:3000
+  - $OPENPANEL_CLIENT_PANEL_DOMAIN -> $OPENPANEL_CLIENT_PANEL_SCHEME://$OPENPANEL_IP:$OPENPANEL_CLIENT_PANEL_PORT
   - $MAIL_DOMAIN, $AUTODISCOVER_DOMAIN, $AUTOCONFIG_DOMAIN, $MTA_STS_DOMAIN -> http://$MAIL_IP:8080
   - $EMAIL_APP_DOMAIN -> http://$MAIL_IP:3001
   - $WEBMAIL_DOMAIN -> http://$MAIL_IP:3000
@@ -849,6 +969,12 @@ EOF
 Headplane:
 - URL: https://$HEADPLANE_DOMAIN
 
+OpenPanel:
+- Client panel URL: https://$OPENPANEL_CLIENT_PANEL_DOMAIN
+- Internal admin URL: http://$OPENPANEL_ADMIN_DOMAIN
+- LXC: $OPENPANEL_CTID $OPENPANEL_IP ($OPENPANEL_HOSTNAME)
+- NPM domain sync timer: sync-npm-domains.timer in the OpenPanel LXC
+
 Mail/email-service:
 - Repo: $EMAIL_SERVICE_REPO
 - Ref: $EMAIL_SERVICE_REF
@@ -874,17 +1000,23 @@ EOF
 
 main() {
     local template
+    local openpanel_memory
+    local openpanel_cores
     require_proxmox
     template="$(ensure_template)"
     validate_template_ref "$template"
+    openpanel_memory="$(resolve_openpanel_memory_mb)"
+    openpanel_cores="$(resolve_openpanel_cores)"
 
     ensure_lxc "$PROXY_CTID" "$PROXY_HOSTNAME" "$PROXY_IP" 768 1 8 "$template"
     ensure_lxc "$AUTH_CTID" "$AUTH_HOSTNAME" "$AUTH_IP" 768 1 6 "$template"
     ensure_lxc "$HEADSCALE_CTID" "$HEADSCALE_HOSTNAME" "$HEADSCALE_IP" 768 1 6 "$template"
     ensure_lxc "$MAIL_CTID" "$MAIL_HOSTNAME" "$MAIL_IP" 5120 2 40 "$template"
+    ensure_lxc "$OPENPANEL_CTID" "$OPENPANEL_HOSTNAME" "$OPENPANEL_IP" "$openpanel_memory" "$openpanel_cores" "$OPENPANEL_DISK_GB" "$template"
 
     install_proxy_lxc "$PROXY_CTID"
     harden_npm_admin
+    install_openpanel_lxc "$OPENPANEL_CTID"
     install_auth_lxc "$AUTH_CTID"
     install_headscale_lxc "$HEADSCALE_CTID"
     install_mail_lxc "$MAIL_CTID"

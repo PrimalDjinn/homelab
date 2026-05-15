@@ -1,0 +1,9 @@
+[Unit]
+Description=Sync OpenPanel domains into Nginx Proxy Manager
+After=network-online.target docker.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+EnvironmentFile=/etc/homelab/openpanel-npm-sync.env
+ExecStart=/usr/local/bin/sync-openpanel-npm-domains

@@ -10,12 +10,12 @@ def env(name: str) -> str:
     return os.environ.get(name, "")
 
 
-def proxy_payload(domain: str | list[str], host: str, port: int) -> dict:
+def proxy_payload(domain: str | list[str], host: str, port: int, scheme: str = "http") -> dict:
     domains = [domain] if isinstance(domain, str) else domain
     domains = [item for item in domains if item]
     return {
         "domain_names": domains,
-        "forward_scheme": "http",
+        "forward_scheme": scheme,
         "forward_host": host,
         "forward_port": port,
         "access_list_id": 0,
@@ -49,6 +49,12 @@ def main() -> None:
         "auth": proxy_payload(env("AUTH_DOMAIN"), env("AUTH_IP"), 9091),
         "headscale": proxy_payload(env("HEADSCALE_DOMAIN"), env("HEADSCALE_IP"), 8080),
         "headplane": proxy_payload(env("HEADPLANE_DOMAIN"), env("HEADSCALE_IP"), 3000),
+        "openpanel": proxy_payload(
+            env("OPENPANEL_CLIENT_PANEL_DOMAIN"),
+            env("OPENPANEL_IP"),
+            int(env("OPENPANEL_CLIENT_PANEL_PORT") or 2083),
+            env("OPENPANEL_CLIENT_PANEL_SCHEME") or "https",
+        ),
         "email": proxy_payload(env("EMAIL_APP_DOMAIN"), env("MAIL_IP"), 3001),
         "webmail": proxy_payload(env("WEBMAIL_DOMAIN"), env("MAIL_IP"), 3000),
         "listmonk": proxy_payload(env("LISTMONK_DOMAIN"), env("MAIL_IP"), 9000),

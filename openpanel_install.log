@@ -1,0 +1,3 @@
+/dev/fd/63: line 55: /root/openpanel_restart_needed: Permission denied
+/dev/fd/63: line 991: /root/openpanel_install.lock: Permission denied
+rm: cannot remove '/root/openpanel_install.lock': Permission denied

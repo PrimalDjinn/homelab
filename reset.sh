@@ -17,6 +17,7 @@ PROXY_CTID="${PROXY_CTID:-110}"
 AUTH_CTID="${AUTH_CTID:-111}"
 HEADSCALE_CTID="${HEADSCALE_CTID:-112}"
 MAIL_CTID="${MAIL_CTID:-113}"
+OPENPANEL_CTID="${OPENPANEL_CTID:-114}"
 PROXY_IP="${PROXY_IP:-$NETWORK_PREFIX.10}"
 MAIL_IP="${MAIL_IP:-$NETWORK_PREFIX.40}"
 MAIL_PORTS="${MAIL_PORTS:-25 110 143 465 587 993 995 4190}"
@@ -73,7 +74,7 @@ confirm() {
     cat <<EOF
 This will remove homelab-managed test resources:
 
-- LXCs: $PROXY_CTID, $AUTH_CTID, $HEADSCALE_CTID, $MAIL_CTID
+- LXCs: $PROXY_CTID, $AUTH_CTID, $HEADSCALE_CTID, $MAIL_CTID, $OPENPANEL_CTID
 - State/secrets: $STATE_DIR
 - DNAT/FORWARD rules forwarding public 80/443 to $PROXY_IP
 - DNAT/FORWARD rules forwarding public mail ports to $MAIL_IP
@@ -296,6 +297,7 @@ remove_lxc "$PROXY_CTID"
 remove_lxc "$AUTH_CTID"
 remove_lxc "$HEADSCALE_CTID"
 remove_lxc "$MAIL_CTID"
+remove_lxc "$OPENPANEL_CTID"
 cleanup_public_proxy_rules
 cleanup_public_mail_rules
 cleanup_pve_firewall_rules

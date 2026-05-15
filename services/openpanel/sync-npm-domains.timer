@@ -1,0 +1,11 @@
+[Unit]
+Description=Periodic OpenPanel to Nginx Proxy Manager domain sync
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=60s
+AccuracySec=10s
+Unit=sync-npm-domains.service
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,40 @@
+services:
+  app:
+    ports:
+      - "3001:3000"
+
+  bulwark-web:
+    ports:
+      - "3000:3000"
+
+  listmonk-app:
+    ports:
+      - "9000:9000"
+
+  postal-web:
+    ports:
+      - "5000:5000"
+
+  libredesk-app:
+    ports:
+      - "9001:9000"
+
+  stalwart-config:
+    environment:
+      - STALWART_CONFIG_PATH=/etc/stalwart/config.toml
+    volumes:
+      - ./scripts/stalwart:/scripts:ro
+      - stalwart_data:/etc/stalwart
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+
+  stalwart:
+    environment:
+      - STALWART_RECOVERY_ADMIN=${STALWART_ADMIN_USER:-admin}:${STALWART_ADMIN_PASSWORD:?STALWART_ADMIN_PASSWORD is required}
+    volumes:
+      - stalwart_data:/etc/stalwart
+      - stalwart_runtime_data:/var/lib/stalwart
+    ports:
+      - "8080:8080"
+
+volumes:
+  stalwart_runtime_data:

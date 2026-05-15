@@ -5,6 +5,9 @@ import shutil
 from pathlib import Path
 
 
+COMPOSE_OVERRIDE_TEMPLATE = Path(__file__).with_name("docker-compose.homelab.yml")
+
+
 def env(name: str, default: str = "") -> str:
     value = os.environ.get(name)
     return default if value is None or value == "" else value
@@ -153,29 +156,7 @@ def write_env(path: Path) -> None:
 
 
 def write_compose_override(path: Path) -> None:
-    path.write_text(
-        """services:
-  app:
-    ports:
-      - "3001:3000"
-  bulwark-web:
-    ports:
-      - "3000:3000"
-  listmonk-app:
-    ports:
-      - "9000:9000"
-  postal-web:
-    ports:
-      - "5000:5000"
-  libredesk-app:
-    ports:
-      - "9001:9000"
-  stalwart:
-    ports:
-      - "8080:8080"
-""",
-        encoding="utf8",
-    )
+    shutil.copyfile(COMPOSE_OVERRIDE_TEMPLATE, path)
 
 
 def main() -> None:

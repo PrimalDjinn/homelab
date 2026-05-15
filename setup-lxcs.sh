@@ -253,8 +253,8 @@ ensure_template() {
     [[ -n "$storage" ]] || error "No Proxmox storage with vztmpl content found."
 
     pveam update >&2
-    template="$(pveam available --section system | awk '/debian-12-standard/ { print $2 }' | sort -V | tail -n1)"
-    [[ -n "$template" ]] || error "Could not find a Debian 12 LXC template."
+    template="$(pveam available --section system | awk '/debian-13-standard/ { print $2 }' | sort -V | tail -n1)"
+    [[ -n "$template" ]] || error "Could not find a Debian 13 LXC template."
 
     if ! pveam list "$storage" | awk '{ print $1 }' | grep -q "/$template$"; then
         info "Downloading LXC template $template to $storage" >&2

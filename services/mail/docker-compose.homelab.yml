@@ -21,20 +21,14 @@ services:
 
   stalwart-config:
     environment:
-      - STALWART_CONFIG_PATH=/etc/stalwart/config.toml
+      - STALWART_CONFIG_PATH=/opt/stalwart/etc/config.toml
     volumes:
       - ./scripts/stalwart:/scripts:ro
-      - stalwart_data:/etc/stalwart
+      - stalwart_data:/opt/stalwart
       - /var/run/docker.sock:/var/run/docker.sock:ro
 
   stalwart:
-    environment:
-      - STALWART_RECOVERY_ADMIN=${STALWART_ADMIN_USER:-admin}:${STALWART_ADMIN_PASSWORD:?STALWART_ADMIN_PASSWORD is required}
     volumes:
-      - stalwart_data:/etc/stalwart
-      - stalwart_runtime_data:/var/lib/stalwart
+      - stalwart_data:/opt/stalwart
     ports:
       - "8080:8080"
-
-volumes:
-  stalwart_runtime_data:

@@ -692,7 +692,21 @@ ensure_lxc() {
 bootstrap_lxc() {
     local ctid="$1"
     info "Bootstrapping base packages in LXC $ctid"
-    pct_exec "$ctid" "export DEBIAN_FRONTEND=noninteractive; apt-get update && apt-get install -y ca-certificates curl file gnupg jq openssl psmisc sqlite3 tar"
+    pct_exec "$ctid" "export DEBIAN_FRONTEND=noninteractive; apt-get update && apt-get install -y ca-certificates curl file gnupg jq openssl psmisc sqlite3 tar unattended-upgrades"
+    pct_exec "$ctid" "cat > /etc/apt/apt.conf.d/20auto-upgrades <<'EOF'
+APT::Periodic::Update-Package-Lists \"1\";
+APT::Periodic::Unattended-Upgrade \"1\";
+APT::Periodic::AutocleanInterval \"7\";
+EOF
+cat > /etc/apt/apt.conf.d/51homelab-unattended-upgrades <<'EOF'
+Unattended-Upgrade::Origins-Pattern {
+        \"origin=Debian,codename=\${distro_codename},label=Debian-Security\";
+        \"origin=Debian,codename=\${distro_codename}-security,label=Debian-Security\";
+};
+Unattended-Upgrade::Automatic-Reboot \"false\";
+Unattended-Upgrade::Remove-Unused-Dependencies \"true\";
+EOF
+systemctl enable --now unattended-upgrades"
 }
 
 install_docker() {

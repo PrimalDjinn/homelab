@@ -24,6 +24,8 @@ NETWORK_RELOAD_TIMEOUT="${HOMELAB_NETWORK_RELOAD_TIMEOUT:-60}"
 NETWORK_RELOAD_RETRY_INTERVAL="${HOMELAB_NETWORK_RELOAD_RETRY_INTERVAL:-3}"
 DNSMASQ_CONFIG="/etc/dnsmasq.d/proxmox-networks.conf"
 SYSCTL_CONFIG="/etc/sysctl.d/99-homelab-ip-forward.conf"
+INTERFACES_FILE="/etc/network/interfaces"
+INTERFACES_PENDING_FILE="/etc/network/interfaces.new"
 
 require_root() {
     if [[ $EUID -ne 0 ]]; then
@@ -102,6 +104,41 @@ reload_network_bridge() {
     fi
 
     ensure_runtime_bridge
+}
+
+ensure_bridge_config_file() {
+    local file="$1"
+
+    if [[ ! -f "$file" ]]; then
+        return
+    fi
+
+    if grep -qE "^iface[[:space:]]+$VM_BRIDGE[[:space:]]+" "$file"; then
+        echo "[+] $VM_BRIDGE already exists in $file; skipping bridge append"
+        return
+    fi
+
+    echo "[+] Adding $VM_BRIDGE to $file"
+    cat <<EOF >>"$file"
+
+# === Internal Network ===
+auto $VM_BRIDGE
+iface $VM_BRIDGE inet static
+    address $GATEWAY_IP/24
+    bridge_ports none
+    bridge_stp off
+    bridge_fd 0
+EOF
+}
+
+ensure_persistent_bridge_config() {
+    ensure_bridge_config_file "$INTERFACES_FILE"
+
+    if [[ -f "$INTERFACES_PENDING_FILE" ]]; then
+        echo "[!] Found pending Proxmox network config: $INTERFACES_PENDING_FILE"
+        echo "[!] Mirroring $VM_BRIDGE there so a later GUI Apply does not remove it"
+        ensure_bridge_config_file "$INTERFACES_PENDING_FILE"
+    fi
 }
 
 ensure_runtime_bridge() {
@@ -369,23 +406,9 @@ require_root
 ### 1️⃣ CREATE NETWORK BRIDGES ###
 
 echo "[+] Backing up /etc/network/interfaces"
-cp /etc/network/interfaces /etc/network/interfaces.bak.$(date +%F-%H-%M)
+cp "$INTERFACES_FILE" "$INTERFACES_FILE.bak.$(date +%F-%H-%M)"
 
-if grep -qE "^iface[[:space:]]+$VM_BRIDGE[[:space:]]+" /etc/network/interfaces; then
-    echo "[+] $VM_BRIDGE already exists in /etc/network/interfaces; skipping bridge append"
-else
-    echo "[+] Adding $VM_BRIDGE (Network)"
-    cat <<EOF >>/etc/network/interfaces
-
-# === Internal Network ===
-auto $VM_BRIDGE
-iface $VM_BRIDGE inet static
-    address $GATEWAY_IP/24
-    bridge_ports none
-    bridge_stp off
-    bridge_fd 0
-EOF
-fi
+ensure_persistent_bridge_config
 
 echo "[+] Reloading network..."
 reload_network_bridge

@@ -7,6 +7,8 @@ services:
       - "81:81"
       - "443:443"
     environment:
+      PUID: 0
+      PGID: 0
       INITIAL_ADMIN_EMAIL: ${NPM_ADMIN_EMAIL:?NPM_ADMIN_EMAIL is required}
       INITIAL_ADMIN_PASSWORD: ${NPM_PASSWORD:?NPM_PASSWORD is required}
     volumes:

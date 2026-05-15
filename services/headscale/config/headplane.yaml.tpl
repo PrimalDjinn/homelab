@@ -24,12 +24,15 @@ integration:
     socket: "unix:///var/run/docker.sock"
   kubernetes:
     enabled: false
+    pod_name: "headscale"
   agent:
     enabled: false
+    pre_authkey: "${HEADPLANE_AGENT_PRE_AUTHKEY}"
 
 oidc:
   enabled: true
   issuer: "https://${AUTH_DOMAIN}"
+  headscale_api_key: "${HEADSCALE_API_KEY}"
   client_id: "headscale"
   client_secret: "${HEADSCALE_OIDC_CLIENT_SECRET}"
   use_pkce: true

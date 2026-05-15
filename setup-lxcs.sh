@@ -427,7 +427,11 @@ install_proxy_lxc() {
     export NPM_VERSION="${NPM_VERSION:-latest}"
     export NPM_ADMIN_EMAIL NPM_PASSWORD
     python3 "$SERVICES_DIR/proxy/render.py" --output-dir "$GENERATED_DIR/proxy"
-    copy_dir_to_lxc "$ctid" "$GENERATED_DIR/proxy" /opt/nginx-proxy-manager
+    pct_exec "$ctid" "mkdir -p /opt/nginx-proxy-manager/data /opt/nginx-proxy-manager/letsencrypt"
+    pct push "$ctid" "$GENERATED_DIR/proxy/docker-compose.yml" /opt/nginx-proxy-manager/docker-compose.yml
+    pct push "$ctid" "$GENERATED_DIR/proxy/.env" /opt/nginx-proxy-manager/.env
+    pct push "$ctid" "$GENERATED_DIR/proxy/start.sh" /opt/nginx-proxy-manager/start.sh
+    pct push "$ctid" "$GENERATED_DIR/proxy/README.md" /opt/nginx-proxy-manager/README.md
     pct_exec "$ctid" "chmod +x /opt/nginx-proxy-manager/start.sh && /opt/nginx-proxy-manager/start.sh"
 }
 
@@ -645,6 +649,7 @@ render_headscale_stack() {
     export HEADPLANE_SERVER__COOKIE_SECRET
     export HEADPLANE_SERVER__INFO_SECRET
     export HEADSCALE_API_KEY="$api_key"
+    export HEADPLANE_AGENT_PRE_AUTHKEY="${HEADPLANE_AGENT_PRE_AUTHKEY:-}"
 
     python3 "$SERVICES_DIR/headscale/render.py" --output-dir "$GENERATED_DIR/headscale"
 }

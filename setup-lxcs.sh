@@ -36,6 +36,8 @@ MAIL_HOSTNAME="${MAIL_HOSTNAME:-homelab-mail}"
 OPENPANEL_HOSTNAME="${OPENPANEL_HOSTNAME:-homelab-openpanel}"
 OPENPANEL_PROVISION_LXC="${OPENPANEL_PROVISION_LXC:-false}"
 OPENPANEL_PROVISION_VM="${OPENPANEL_PROVISION_VM:-true}"
+OPENPANEL_VM_INSTALL_METHOD="${OPENPANEL_VM_INSTALL_METHOD:-cloud-image}"
+OPENPANEL_CLOUD_IMAGE_URL="${OPENPANEL_CLOUD_IMAGE_URL:-https://cloud-images.ubuntu.com/noble/current/noble-server-cloudimg-amd64.img}"
 OPENPANEL_ISO="${OPENPANEL_ISO:-auto}"
 OPENPANEL_ISO_STORAGE="${OPENPANEL_ISO_STORAGE:-auto}"
 OPENPANEL_VM_STORAGE="${OPENPANEL_VM_STORAGE:-auto}"
@@ -131,6 +133,21 @@ ensure_host_jq() {
     fi
 
     error "jq is required for API payload handling and could not be installed automatically."
+}
+
+ensure_host_curl() {
+    if command -v curl >/dev/null 2>&1; then
+        return
+    fi
+
+    if command -v apt-get >/dev/null 2>&1; then
+        info "Installing curl on the Proxmox host"
+        apt-get update
+        DEBIAN_FRONTEND=noninteractive apt-get install -y curl
+        return
+    fi
+
+    error "curl is required to download the OpenPanel cloud image."
 }
 
 ensure_host_genisoimage() {
@@ -241,6 +258,7 @@ require_proxmox() {
     need_cmd openssl
     ensure_host_python
     ensure_host_jq
+    ensure_host_curl
     ensure_host_genisoimage
     require_pve_config_fs
 }
@@ -421,6 +439,81 @@ openpanel_ssh() {
 openpanel_scp() {
     local key_file="$1" source="$2" dest="$3"
     scp -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -i "$key_file" "$source" "$OPENPANEL_SSH_USER@$OPENPANEL_IP:$dest"
+}
+
+ensure_openpanel_cloud_image() {
+    local image="$GENERATED_DIR/openpanel-cloud.img"
+
+    if [[ ! -s "$image" ]]; then
+        info "Downloading OpenPanel VM cloud image"
+        curl -fL "$OPENPANEL_CLOUD_IMAGE_URL" -o "$image"
+    fi
+
+    echo "$image"
+}
+
+create_openpanel_cloud_vm() {
+    local vmid="$1" memory="$2" cores="$3" disk_storage="$4" key_file="$5"
+    local image imported_disk
+
+    image="$(ensure_openpanel_cloud_image)"
+    info "Creating OpenPanel VM $vmid ($OPENPANEL_HOSTNAME) from cloud image"
+    qm create "$vmid" \
+        --name "$OPENPANEL_HOSTNAME" \
+        --memory "$memory" \
+        --cores "$cores" \
+        --cpu host \
+        --machine q35 \
+        --scsihw virtio-scsi-pci \
+        --net0 "virtio,bridge=$VM_BRIDGE" \
+        --agent enabled=1 \
+        --ostype l26 \
+        --onboot 1
+
+    qm importdisk "$vmid" "$image" "$disk_storage"
+    imported_disk="$(qm config "$vmid" | awk '/unused[0-9]+:/ { print $2; exit }')"
+    [[ -n "$imported_disk" ]] || error "Could not find imported OpenPanel VM disk for VM $vmid"
+    qm set "$vmid" \
+        --scsi0 "$imported_disk" \
+        --ide2 "$disk_storage:cloudinit" \
+        --boot order=scsi0 \
+        --serial0 socket \
+        --vga serial0 \
+        --ciuser "$OPENPANEL_SSH_USER" \
+        --sshkeys "$key_file.pub" \
+        --ipconfig0 "ip=$OPENPANEL_IP/24,gw=$GATEWAY_IP" \
+        --nameserver "$GATEWAY_IP" \
+        --searchdomain "$DOMAIN"
+    qm resize "$vmid" scsi0 "${OPENPANEL_DISK_GB}G" >/dev/null 2>&1 || true
+    qm start "$vmid"
+}
+
+create_openpanel_iso_vm() {
+    local vmid="$1" memory="$2" cores="$3" disk_storage="$4" key_file="$5" password="$6"
+    local iso_ref seed_iso seed_ref
+
+    iso_ref="$(select_openpanel_iso)"
+    seed_iso="$(write_openpanel_seed_iso "$key_file" "$password")"
+    seed_ref="$(upload_iso_file "$seed_iso" "homelab-openpanel-seed.iso")"
+
+    warn "ISO autoinstall may still require adding 'autoinstall' to the installer kernel command line. Prefer OPENPANEL_VM_INSTALL_METHOD=cloud-image."
+    info "Creating OpenPanel VM $vmid ($OPENPANEL_HOSTNAME) from $iso_ref"
+    qm create "$vmid" \
+        --name "$OPENPANEL_HOSTNAME" \
+        --memory "$memory" \
+        --cores "$cores" \
+        --cpu host \
+        --machine q35 \
+        --scsihw virtio-scsi-pci \
+        --scsi0 "$disk_storage:${OPENPANEL_DISK_GB}" \
+        --ide2 "$iso_ref,media=cdrom" \
+        --ide3 "$seed_ref,media=cdrom" \
+        --boot order=ide2 \
+        --net0 "virtio,bridge=$VM_BRIDGE" \
+        --agent enabled=1 \
+        --ostype l26 \
+        --onboot 1
+    qm start "$vmid"
 }
 
 lxc_config_file() {
@@ -714,7 +807,7 @@ ensure_openpanel_vm() {
     local vmid="$OPENPANEL_VMID"
     local memory="$1"
     local cores="$2"
-    local disk_storage iso_ref seed_iso seed_ref key_file password
+    local disk_storage key_file password
 
     if [[ "$OPENPANEL_PROVISION_VM" != "true" ]]; then
         warn "Skipping OpenPanel VM provisioning because OPENPANEL_PROVISION_VM is not true."
@@ -730,27 +823,17 @@ ensure_openpanel_vm() {
         info "OpenPanel VM $vmid already exists; ensuring it is running"
         qm start "$vmid" >/dev/null 2>&1 || true
     else
-        iso_ref="$(select_openpanel_iso)"
-        seed_iso="$(write_openpanel_seed_iso "$key_file" "$password")"
-        seed_ref="$(upload_iso_file "$seed_iso" "homelab-openpanel-seed.iso")"
-
-        info "Creating OpenPanel VM $vmid ($OPENPANEL_HOSTNAME) from $iso_ref"
-        qm create "$vmid" \
-            --name "$OPENPANEL_HOSTNAME" \
-            --memory "$memory" \
-            --cores "$cores" \
-            --cpu host \
-            --machine q35 \
-            --scsihw virtio-scsi-pci \
-            --scsi0 "$disk_storage:${OPENPANEL_DISK_GB}" \
-            --ide2 "$iso_ref,media=cdrom" \
-            --ide3 "$seed_ref,media=cdrom" \
-            --boot order=ide2 \
-            --net0 "virtio,bridge=$VM_BRIDGE" \
-            --agent enabled=1 \
-            --ostype l26 \
-            --onboot 1
-        qm start "$vmid"
+        case "$OPENPANEL_VM_INSTALL_METHOD" in
+            cloud-image)
+                create_openpanel_cloud_vm "$vmid" "$memory" "$cores" "$disk_storage" "$key_file"
+                ;;
+            iso)
+                create_openpanel_iso_vm "$vmid" "$memory" "$cores" "$disk_storage" "$key_file" "$password"
+                ;;
+            *)
+                error "Unsupported OPENPANEL_VM_INSTALL_METHOD: $OPENPANEL_VM_INSTALL_METHOD"
+                ;;
+        esac
     fi
 
     if ! wait_for_ssh "$OPENPANEL_IP" "$key_file" "$OPENPANEL_SSH_USER"; then

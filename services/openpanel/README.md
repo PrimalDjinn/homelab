@@ -4,13 +4,12 @@ This service contains integration assets for OpenPanel Community Edition and
 keeps public client domains attached to Nginx Proxy Manager.
 
 OpenPanel upstream explicitly does not support installation inside containers
-or LXCs. The homelab installer creates a dedicated VM, selects a Debian/Ubuntu
-ISO from Proxmox ISO storage, attaches a generated seed ISO, and then installs
-OpenPanel over SSH once the OS is reachable.
+or LXCs. The homelab installer creates a dedicated VM. By default it imports an
+Ubuntu cloud image and uses Proxmox cloud-init for unattended SSH/network setup,
+then installs OpenPanel over SSH once the OS is reachable.
 
-If the selected installer ISO does not consume the generated unattended seed,
-complete the OS install manually with the configured static IP and rerun
-`setup-lxcs.sh`; it will continue from the SSH/OpenPanel install step.
+The ISO path is still available with `OPENPANEL_VM_INSTALL_METHOD=iso`, but
+Ubuntu live-server requires `autoinstall` on the installer kernel command line.
 
 Design:
 

@@ -25,6 +25,12 @@ sudo pct exec 113 -- bash -lc "/opt/email-service/update-smtp-credentials.sh \
   --from noreply@example.com"
 ```
 
+Stalwart config is generated from `/opt/email-service/.env` by the upstream `stalwart-config` one-shot container. If Stalwart has stale or incomplete config after env changes, regenerate and restart it with:
+
+```sh
+sudo pct exec 113 -- bash -lc "/opt/email-service/regenerate-stalwart-config.sh"
+```
+
 During testing, reset managed service resources with:
 
 ```sh

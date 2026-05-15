@@ -133,6 +133,38 @@ pct_exec() {
     pct exec "$ctid" -- bash -lc "$*"
 }
 
+free_mail_ports_in_lxc() {
+    local ctid="$1"
+
+    pct_exec "$ctid" '
+        set -eu
+        ports="25 110 143 465 587 993 995 4190"
+        services="postfix exim4 dovecot courier-imap courier-pop"
+
+        if command -v systemctl >/dev/null 2>&1; then
+            for service in $services; do
+                if systemctl list-unit-files "$service.service" >/dev/null 2>&1; then
+                    systemctl stop "$service" >/dev/null 2>&1 || true
+                    systemctl disable "$service" >/dev/null 2>&1 || true
+                fi
+            done
+        fi
+
+        if command -v docker >/dev/null 2>&1; then
+            container_ids="$(docker ps --format "{{.ID}} {{.Ports}}" | grep -E "(:25->|:110->|:143->|:465->|:587->|:993->|:995->|:4190->)" | awk "{print \$1}" || true)"
+            if [ -n "$container_ids" ]; then
+                echo "$container_ids" | xargs docker stop
+            fi
+        fi
+
+        if command -v fuser >/dev/null 2>&1; then
+            for port in $ports; do
+                fuser -k "$port/tcp" >/dev/null 2>&1 || true
+            done
+        fi
+    '
+}
+
 wait_for_lxc() {
     local ctid="$1"
 
@@ -317,7 +349,7 @@ ensure_lxc() {
 bootstrap_lxc() {
     local ctid="$1"
     info "Bootstrapping base packages in LXC $ctid"
-    pct_exec "$ctid" "export DEBIAN_FRONTEND=noninteractive; apt-get update && apt-get install -y ca-certificates curl file gnupg jq openssl sqlite3 tar"
+    pct_exec "$ctid" "export DEBIAN_FRONTEND=noninteractive; apt-get update && apt-get install -y ca-certificates curl file gnupg jq openssl psmisc sqlite3 tar"
 }
 
 install_docker() {
@@ -379,6 +411,9 @@ install_mail_lxc() {
     pct push "$ctid" "$GENERATED_DIR/mail/.env" /opt/email-service/.env
     pct push "$ctid" "$GENERATED_DIR/mail/docker-compose.homelab.yml" /opt/email-service/docker-compose.homelab.yml
     pct_exec "$ctid" "chmod 600 /opt/email-service/.env"
+
+    info "Freeing mail ports inside LXC $ctid before starting email-service"
+    free_mail_ports_in_lxc "$ctid"
 
     info "Starting email-service production stack in LXC $ctid"
     pct_exec "$ctid" "cd /opt/email-service && docker compose -f ./docker-compose.prod.yml -f ./docker-compose.homelab.yml --env-file .env up -d"
@@ -807,7 +842,7 @@ main() {
     ensure_lxc "$PROXY_CTID" "$PROXY_HOSTNAME" "$PROXY_IP" 768 1 8 "$template"
     ensure_lxc "$AUTH_CTID" "$AUTH_HOSTNAME" "$AUTH_IP" 768 1 6 "$template"
     ensure_lxc "$HEADSCALE_CTID" "$HEADSCALE_HOSTNAME" "$HEADSCALE_IP" 768 1 6 "$template"
-    ensure_lxc "$MAIL_CTID" "$MAIL_HOSTNAME" "$MAIL_IP" 4096 2 40 "$template"
+    ensure_lxc "$MAIL_CTID" "$MAIL_HOSTNAME" "$MAIL_IP" 5120 2 40 "$template"
 
     install_proxy_lxc "$PROXY_CTID"
     harden_npm_admin

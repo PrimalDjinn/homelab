@@ -5,9 +5,8 @@ This LXC runs the official Nginx Proxy Manager Docker Compose stack.
 Initial UI:
 
 - `http://<proxy-lxc-ip>:81`
-- NPM's upstream default first-run login is usually `admin@example.com` / `changeme`.
-- The installer uses `NPM_ADMIN_EMAIL` and `NPM_DEFAULT_PASSWORD` from the root `.env` when trying to seed proxy hosts.
-- Change the NPM admin account immediately after first login.
+- The installer seeds the initial admin account with `NPM_ADMIN_EMAIL` and `NPM_PASSWORD` from the root `.env`.
+- If `NPM_PASSWORD` is empty, the installer generates one under `/root/homelab/secrets/npm-admin-password`.
 
 Recommended proxy hosts:
 

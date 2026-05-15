@@ -46,8 +46,6 @@ AUTOCONFIG_DOMAIN="${AUTOCONFIG_DOMAIN:-autoconfig.$DOMAIN}"
 MTA_STS_DOMAIN="${MTA_STS_DOMAIN:-mta-sts.$DOMAIN}"
 LE_EMAIL="${LE_EMAIL:-admin@$DOMAIN}"
 AUTH_ADMIN_USER="${AUTH_ADMIN_USER:-admin}"
-NPM_BOOTSTRAP_EMAIL="${NPM_BOOTSTRAP_EMAIL:-admin@example.com}"
-NPM_BOOTSTRAP_PASSWORD="${NPM_BOOTSTRAP_PASSWORD:-changeme}"
 NPM_ADMIN_EMAIL="${NPM_ADMIN_EMAIL:-$LE_EMAIL}"
 NPM_PASSWORD="${NPM_PASSWORD:-${NPM_DEFAULT_PASSWORD:-}}"
 NPM_DNS_CHALLENGE_PROVIDER="${NPM_DNS_CHALLENGE_PROVIDER:-cloudflare}"
@@ -426,6 +424,7 @@ install_proxy_lxc() {
 
     info "Installing Nginx Proxy Manager in LXC $ctid"
     export NPM_VERSION="${NPM_VERSION:-latest}"
+    export NPM_ADMIN_EMAIL NPM_PASSWORD
     python3 "$SERVICES_DIR/proxy/render.py" --output-dir "$GENERATED_DIR/proxy"
     copy_dir_to_lxc "$ctid" "$GENERATED_DIR/proxy" /opt/nginx-proxy-manager
     pct_exec "$ctid" "chmod +x /opt/nginx-proxy-manager/start.sh && /opt/nginx-proxy-manager/start.sh"
@@ -435,6 +434,8 @@ harden_npm_admin() {
     local token
     local verified_token
     local ctid="$PROXY_CTID"
+    local login_email=""
+    local login_password=""
 
     info "Ensuring Nginx Proxy Manager admin credentials are not left at first-run defaults"
     pct_exec "$ctid" "for i in \$(seq 1 60); do curl -fsS http://127.0.0.1:81/api >/dev/null 2>&1 && exit 0; sleep 2; done; exit 1" || {
@@ -450,24 +451,39 @@ harden_npm_admin() {
         return
     fi
 
-    token="$(pct_exec "$ctid" "curl -fsS -X POST http://127.0.0.1:81/api/tokens -H 'Content-Type: application/json' --data \"\$(jq -nc --arg identity $(quote "$NPM_BOOTSTRAP_EMAIL") --arg secret $(quote "$NPM_BOOTSTRAP_PASSWORD") '{identity:\$identity,secret:\$secret}')\" | jq -r '.token // empty'" 2>/dev/null || true)"
+    if [[ -n "${NPM_BOOTSTRAP_EMAIL:-}" && -n "${NPM_BOOTSTRAP_PASSWORD:-}" ]]; then
+        token="$(pct_exec "$ctid" "curl -fsS -X POST http://127.0.0.1:81/api/tokens -H 'Content-Type: application/json' --data \"\$(jq -nc --arg identity $(quote "$NPM_BOOTSTRAP_EMAIL") --arg secret $(quote "$NPM_BOOTSTRAP_PASSWORD") '{identity:\$identity,secret:\$secret}')\" | jq -r '.token // empty'" 2>/dev/null || true)"
+        if [[ -n "$token" ]]; then
+            login_email="$NPM_BOOTSTRAP_EMAIL"
+            login_password="$NPM_BOOTSTRAP_PASSWORD"
+        fi
+    fi
+
     if [[ -z "$token" ]]; then
-        warn "Could not log in to Nginx Proxy Manager with desired or bootstrap credentials; change the admin credentials manually."
+        token="$(pct_exec "$ctid" "curl -fsS -X POST http://127.0.0.1:81/api/tokens -H 'Content-Type: application/json' --data \"\$(jq -nc --arg identity admin@example.com --arg secret changeme '{identity:\$identity,secret:\$secret}')\" | jq -r '.token // empty'" 2>/dev/null || true)"
+        if [[ -n "$token" ]]; then
+            login_email="admin@example.com"
+            login_password="changeme"
+        fi
+    fi
+
+    if [[ -z "$token" ]]; then
+        warn "Could not log in to Nginx Proxy Manager with configured, bootstrap, or legacy default credentials; change the admin credentials manually."
         return
     fi
 
-    pct_exec "$ctid" "curl -fsS -X PUT http://127.0.0.1:81/api/users/1/auth -H 'Authorization: Bearer $(quote "$token")' -H 'Content-Type: application/json' --data \"\$(jq -nc --arg current $(quote "$NPM_BOOTSTRAP_PASSWORD") --arg secret $(quote "$NPM_PASSWORD") '{type:\"password\",current:\$current,secret:\$secret}')\" >/dev/null" || {
+    pct_exec "$ctid" "curl -fsS -X PUT http://127.0.0.1:81/api/users/1/auth -H 'Authorization: Bearer $(quote "$token")' -H 'Content-Type: application/json' --data \"\$(jq -nc --arg current $(quote "$login_password") --arg secret $(quote "$NPM_PASSWORD") '{type:\"password\",current:\$current,secret:\$secret}')\" >/dev/null" || {
         warn "Could not update the Nginx Proxy Manager admin password automatically."
     }
 
-    verified_token="$(pct_exec "$ctid" "curl -fsS -X POST http://127.0.0.1:81/api/tokens -H 'Content-Type: application/json' --data \"\$(jq -nc --arg identity $(quote "$NPM_BOOTSTRAP_EMAIL") --arg secret $(quote "$NPM_PASSWORD") '{identity:\$identity,secret:\$secret}')\" | jq -r '.token // empty'" 2>/dev/null || true)"
+    verified_token="$(pct_exec "$ctid" "curl -fsS -X POST http://127.0.0.1:81/api/tokens -H 'Content-Type: application/json' --data \"\$(jq -nc --arg identity $(quote "$login_email") --arg secret $(quote "$NPM_PASSWORD") '{identity:\$identity,secret:\$secret}')\" | jq -r '.token // empty'" 2>/dev/null || true)"
     if [[ -n "$verified_token" ]]; then
         token="$verified_token"
-        NPM_LOGIN_EMAIL="$NPM_BOOTSTRAP_EMAIL"
+        NPM_LOGIN_EMAIL="$login_email"
         NPM_LOGIN_PASSWORD="$NPM_PASSWORD"
     else
-        NPM_LOGIN_EMAIL="$NPM_BOOTSTRAP_EMAIL"
-        NPM_LOGIN_PASSWORD="$NPM_BOOTSTRAP_PASSWORD"
+        NPM_LOGIN_EMAIL="$login_email"
+        NPM_LOGIN_PASSWORD="$login_password"
     fi
 
     pct_exec "$ctid" "curl -fsS -X PUT http://127.0.0.1:81/api/users/1 -H 'Authorization: Bearer $(quote "$token")' -H 'Content-Type: application/json' --data \"\$(jq -nc --arg email $(quote "$NPM_ADMIN_EMAIL") '{name:\"Homelab Admin\",nickname:\"Homelab\",email:\$email,roles:[\"admin\"],is_disabled:false}')\" >/dev/null" || {

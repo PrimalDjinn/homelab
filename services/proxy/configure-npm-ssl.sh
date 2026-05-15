@@ -98,7 +98,7 @@ cert_id="$(
 if [[ -z "$cert_id" ]]; then
     if use_dns_challenge; then
         if [[ -z "$CLOUDFLARE_DNS_API_TOKEN" ]]; then
-            printf 'CLOUDFLARE_DNS_API_TOKEN is required for NPM Cloudflare DNS-01 certificates. Set NPM_SKIP_CLOUDFLARE_DNS_TOKEN=true only if you intentionally want HTTP-01 instead.\n' >&2
+            printf 'CLOUDFLARE_DNS_API_TOKEN is required inside the NPM SSL helper for Cloudflare DNS-01 certificates. The outer installer fills it from NPM_CLOUDFLARE_DNS_API_TOKEN, CLOUDFLARE_DNS_API_TOKEN, or STALWART_ACME_DNS_CF_SECRET. Set NPM_SKIP_CLOUDFLARE_DNS_TOKEN=true only if you intentionally want HTTP-01 instead.\n' >&2
             exit 1
         fi
 

@@ -51,7 +51,7 @@ def write_env(path: Path) -> None:
         "SMTP_HOST": env("SMTP_HOST", "stalwart"),
         "SMTP_PORT": env("SMTP_PORT", "587"),
         "SMTP_USER": env("SMTP_USER", f"noreply@{domain}"),
-        "SMTP_PASS": env("SMTP_PASS"),
+        "SMTP_PASS": env("SMTP_PASS", env("PLACEHOLDER_SMTP_PASS", "ChangeMe1!placeholder")),
         "DEFAULT_FROM": env("DEFAULT_FROM", f"noreply@{domain}"),
         "JWT_SECRET": env("EMAIL_JWT_SECRET"),
         "ALLOWED_DOMAINS": env("ALLOWED_DOMAINS", domain),

@@ -16,6 +16,15 @@ After provisioning, read `/root/homelab/access.txt` on the Proxmox host for init
 
 Headscale keeps its public server URL as `https://headscale.<domain>`. Internal service-to-service traffic uses direct internal addresses, for example Headplane talks to `http://headscale:8080` and the proxy LXC joins Headscale through `http://<headscale-lxc-ip>:8080`.
 
+The mail app starts with `EMAIL_PROVIDER=nodemailer` and placeholder SMTP credentials so its startup validation passes before the real Stalwart mailbox exists. After creating the real SMTP account, update the mail app inside the mail LXC and recreate only that app container:
+
+```sh
+sudo pct exec 113 -- bash -lc "/opt/email-service/update-smtp-credentials.sh \
+  --user noreply@example.com \
+  --pass 'real-password' \
+  --from noreply@example.com"
+```
+
 During testing, reset managed service resources with:
 
 ```sh

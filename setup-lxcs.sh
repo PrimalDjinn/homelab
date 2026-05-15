@@ -179,6 +179,23 @@ secret_file() {
     cat "$file"
 }
 
+strong_secret_file() {
+    local file="$1"
+    local length="${2:-24}"
+    local value
+
+    if [[ -s "$file" ]]; then
+        value="$(cat "$file")"
+    fi
+
+    if [[ ! "${value:-}" =~ [A-Z] || ! "${value:-}" =~ [a-z] || ! "${value:-}" =~ [0-9] || ! "${value:-}" =~ [^a-zA-Z0-9] || ${#value} -lt 10 || ${#value} -gt 72 ]]; then
+        value="A1!$(random_token "$((length - 3))")"
+        printf '%s\n' "$value" > "$file"
+        chmod 600 "$file"
+    fi
+    cat "$file"
+}
+
 ensure_ssh_keypair() {
     local key_file="$SECRETS_DIR/openpanel-vm-ed25519"
 
@@ -710,7 +727,7 @@ export_mail_env() {
     export STALWART_REDIS_PASSWORD="${STALWART_REDIS_PASSWORD:-$(secret_file "$SECRETS_DIR/stalwart-redis-password" 32)}"
     export STALWART_MINIO_ROOT_PASSWORD="${STALWART_MINIO_ROOT_PASSWORD:-$(secret_file "$SECRETS_DIR/stalwart-minio-root-password" 32)}"
     export BULWARK_SESSION_SECRET="${BULWARK_SESSION_SECRET:-$(secret_file "$SECRETS_DIR/bulwark-session-secret" 64)}"
-    export LIBREDESK_SYSTEM_USER_PASSWORD="${LIBREDESK_SYSTEM_USER_PASSWORD:-$(secret_file "$SECRETS_DIR/libredesk-system-user-password" 32)}"
+    export LIBREDESK_SYSTEM_USER_PASSWORD="${LIBREDESK_SYSTEM_USER_PASSWORD:-$(strong_secret_file "$SECRETS_DIR/libredesk-system-user-password" 24)}"
     export LIBREDESK_DB__PASSWORD="${LIBREDESK_DB__PASSWORD:-$(secret_file "$SECRETS_DIR/libredesk-db-password" 32)}"
     export LIBREDESK_APP__ENCRYPTION_KEY="${LIBREDESK_APP__ENCRYPTION_KEY:-$(secret_file "$SECRETS_DIR/libredesk-encryption-key" 32)}"
 }
@@ -736,7 +753,8 @@ install_mail_lxc() {
     python3 "$SERVICES_DIR/mail/render.py" --output-dir "$GENERATED_DIR/mail"
     pct push "$ctid" "$GENERATED_DIR/mail/.env" /opt/email-service/.env
     pct push "$ctid" "$GENERATED_DIR/mail/docker-compose.homelab.yml" /opt/email-service/docker-compose.homelab.yml
-    pct_exec "$ctid" "chmod 600 /opt/email-service/.env"
+    pct push "$ctid" "$SERVICES_DIR/mail/update-smtp-credentials.sh" /opt/email-service/update-smtp-credentials.sh
+    pct_exec "$ctid" "chmod 600 /opt/email-service/.env && chmod +x /opt/email-service/update-smtp-credentials.sh"
 
     info "Freeing mail ports inside LXC $ctid before starting email-service"
     free_mail_ports_in_lxc "$ctid"

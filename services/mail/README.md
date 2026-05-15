@@ -19,3 +19,14 @@ The Proxmox host forwards public mail protocol ports directly to the mail LXC:
 Stalwart DNS-01 ACME uses `STALWART_ACME_DNS_CF_SECRET` when set. If it is
 blank, the generated email-service `.env` falls back to
 `CLOUDFLARE_DNS_API_TOKEN`.
+
+The email app defaults to `EMAIL_PROVIDER=nodemailer` with placeholder SMTP
+credentials so startup validation passes before the real Stalwart mailbox is
+created. After creating the real SMTP account, update and restart the app:
+
+```sh
+/opt/email-service/update-smtp-credentials.sh \
+  --user noreply@example.com \
+  --pass 'real-password' \
+  --from noreply@example.com
+```

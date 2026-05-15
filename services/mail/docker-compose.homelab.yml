@@ -20,15 +20,32 @@ services:
       - "9001:9000"
 
   stalwart-config:
+    image: python:3.12-alpine
+    command:
+      - python
+      - /scripts/init.py
     environment:
-      - STALWART_CONFIG_PATH=/opt/stalwart/etc/config.toml
+      - STALWART_CONFIG_DIR=/etc/stalwart
+    env_file:
+      - .env
     volumes:
-      - ./scripts/stalwart:/scripts:ro
-      - stalwart_data:/opt/stalwart
-      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - ./scripts/stalwart-homelab:/scripts:ro
+      - stalwart_config_data:/etc/stalwart
 
   stalwart:
+    command:
+      - --config
+      - /etc/stalwart/config.json
+    environment:
+      - STALWART_DB_PASSWORD=${STALWART_DB_PASSWORD:?STALWART_DB_PASSWORD is required}
+      - STALWART_PUBLIC_URL=https://${STALWART_HOSTNAME:?STALWART_HOSTNAME is required}
+      - STALWART_RECOVERY_ADMIN=${STALWART_ADMIN_USER:-admin}:${STALWART_ADMIN_PASSWORD:?STALWART_ADMIN_PASSWORD is required}
     volumes:
-      - stalwart_data:/opt/stalwart
+      - stalwart_config_data:/etc/stalwart
+      - stalwart_runtime_data:/var/lib/stalwart
     ports:
       - "8080:8080"
+
+volumes:
+  stalwart_config_data:
+  stalwart_runtime_data:

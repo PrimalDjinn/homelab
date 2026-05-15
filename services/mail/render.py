@@ -79,7 +79,7 @@ def write_env(path: Path) -> None:
         "LISTMONK_ADMIN_USER": env("LISTMONK_ADMIN_USER", "admin"),
         "LISTMONK_ADMIN_PASSWORD": env("LISTMONK_ADMIN_PASSWORD"),
         "LISTMONK_TIMEZONE": env("LISTMONK_TIMEZONE", "Etc/UTC"),
-        "STALWART_IMAGE": env("STALWART_IMAGE", "stalwartlabs/stalwart:v0.15"),
+        "STALWART_IMAGE": env("STALWART_IMAGE", "stalwartlabs/stalwart:latest"),
         "STALWART_HOSTNAME": mail_domain,
         "STALWART_AUTODISCOVER_HOSTNAME": autodiscover_domain,
         "STALWART_AUTOCONFIG_HOSTNAME": autoconfig_domain,
@@ -159,6 +159,11 @@ def write_compose_override(path: Path) -> None:
     shutil.copyfile(COMPOSE_OVERRIDE_TEMPLATE, path)
 
 
+def copy_stalwart_scripts(path: Path) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copytree(Path(__file__).with_name("stalwart"), path)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--output-dir", required=True, type=Path)
@@ -170,6 +175,7 @@ def main() -> None:
     dest.mkdir(parents=True)
     write_env(dest / ".env")
     write_compose_override(dest / "docker-compose.homelab.yml")
+    copy_stalwart_scripts(dest / "scripts" / "stalwart-homelab")
 
 
 if __name__ == "__main__":

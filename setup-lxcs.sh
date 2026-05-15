@@ -23,7 +23,7 @@ PROXY_CTID="${PROXY_CTID:-110}"
 AUTH_CTID="${AUTH_CTID:-111}"
 HEADSCALE_CTID="${HEADSCALE_CTID:-112}"
 MAIL_CTID="${MAIL_CTID:-113}"
-OPENPANEL_CTID="${OPENPANEL_CTID:-114}"
+OPENPANEL_VMID="${OPENPANEL_VMID:-114}"
 PROXY_IP="${PROXY_IP:-$NETWORK_PREFIX.10}"
 AUTH_IP="${AUTH_IP:-$NETWORK_PREFIX.20}"
 HEADSCALE_IP="${HEADSCALE_IP:-$NETWORK_PREFIX.30}"
@@ -34,6 +34,12 @@ AUTH_HOSTNAME="${AUTH_HOSTNAME:-homelab-auth}"
 HEADSCALE_HOSTNAME="${HEADSCALE_HOSTNAME:-homelab-headscale}"
 MAIL_HOSTNAME="${MAIL_HOSTNAME:-homelab-mail}"
 OPENPANEL_HOSTNAME="${OPENPANEL_HOSTNAME:-homelab-openpanel}"
+OPENPANEL_PROVISION_LXC="${OPENPANEL_PROVISION_LXC:-false}"
+OPENPANEL_PROVISION_VM="${OPENPANEL_PROVISION_VM:-true}"
+OPENPANEL_ISO="${OPENPANEL_ISO:-auto}"
+OPENPANEL_ISO_STORAGE="${OPENPANEL_ISO_STORAGE:-auto}"
+OPENPANEL_VM_STORAGE="${OPENPANEL_VM_STORAGE:-auto}"
+OPENPANEL_SSH_USER="${OPENPANEL_SSH_USER:-openpanel}"
 PROXY_DOMAIN="${PROXY_DOMAIN:-proxy.$DOMAIN}"
 AUTH_DOMAIN="${AUTH_DOMAIN:-auth.$DOMAIN}"
 HEADSCALE_DOMAIN="${HEADSCALE_DOMAIN:-headscale.$DOMAIN}"
@@ -127,6 +133,21 @@ ensure_host_jq() {
     error "jq is required for API payload handling and could not be installed automatically."
 }
 
+ensure_host_genisoimage() {
+    if command -v genisoimage >/dev/null 2>&1; then
+        return
+    fi
+
+    if command -v apt-get >/dev/null 2>&1; then
+        info "Installing genisoimage on the Proxmox host for OpenPanel VM seed ISO"
+        apt-get update
+        DEBIAN_FRONTEND=noninteractive apt-get install -y genisoimage
+        return
+    fi
+
+    error "genisoimage is required to create the OpenPanel VM unattended seed ISO."
+}
+
 random_token() {
     openssl rand -hex "$(((${1:-32} + 1) / 2))" | cut -c "1-${1:-32}"
 }
@@ -139,6 +160,17 @@ secret_file() {
         chmod 600 "$file"
     fi
     cat "$file"
+}
+
+ensure_ssh_keypair() {
+    local key_file="$SECRETS_DIR/openpanel-vm-ed25519"
+
+    if [[ ! -s "$key_file" ]]; then
+        ssh-keygen -t ed25519 -N '' -f "$key_file" -C "homelab-openpanel" >/dev/null
+        chmod 600 "$key_file"
+    fi
+
+    echo "$key_file"
 }
 
 quote() {
@@ -203,11 +235,13 @@ copy_dir_to_lxc() {
 
 require_proxmox() {
     need_cmd pct
+    need_cmd qm
     need_cmd pveam
     need_cmd pvesm
     need_cmd openssl
     ensure_host_python
     ensure_host_jq
+    ensure_host_genisoimage
     require_pve_config_fs
 }
 
@@ -249,6 +283,144 @@ template_storage() {
 
 rootfs_storage() {
     pvesm status --content rootdir | awk 'NR > 1 { print $1; exit }'
+}
+
+vm_disk_storage() {
+    if [[ "$OPENPANEL_VM_STORAGE" != "auto" ]]; then
+        echo "$OPENPANEL_VM_STORAGE"
+        return
+    fi
+
+    pvesm status --content images | awk 'NR > 1 { print $1; exit }'
+}
+
+iso_storages() {
+    if [[ "$OPENPANEL_ISO_STORAGE" != "auto" ]]; then
+        echo "$OPENPANEL_ISO_STORAGE"
+        return
+    fi
+
+    pvesm status --content iso | awk 'NR > 1 { print $1 }'
+}
+
+select_openpanel_iso() {
+    local storage volids selected
+
+    if [[ "$OPENPANEL_ISO" != "auto" ]]; then
+        for storage in $(iso_storages); do
+            if pvesm list "$storage" --content iso | awk 'NR > 1 { print $1 }' | grep -q "/$OPENPANEL_ISO$"; then
+                echo "$storage:iso/$OPENPANEL_ISO"
+                return
+            fi
+        done
+        error "Could not find OpenPanel ISO filename in Proxmox ISO storage: $OPENPANEL_ISO"
+    fi
+
+    volids="$(for storage in $(iso_storages); do pvesm list "$storage" --content iso 2>/dev/null | awk 'NR > 1 { print $1 }'; done)"
+    selected="$(printf '%s\n' "$volids" | grep -Ei '/(ubuntu|debian).*(server|live|netinst).*amd64.*\.iso$' | sort -V | tail -n1 || true)"
+    if [[ -z "$selected" ]]; then
+        selected="$(printf '%s\n' "$volids" | grep -Ei '/(ubuntu|debian).*\.iso$' | sort -V | tail -n1 || true)"
+    fi
+    [[ -n "$selected" ]] || error "No Ubuntu/Debian ISO found in Proxmox ISO storage. Upload an ISO or set OPENPANEL_ISO."
+    echo "$selected"
+}
+
+write_openpanel_seed_iso() {
+    local key_file="$1"
+    local password="$2"
+    local seed_dir="$GENERATED_DIR/openpanel-seed"
+    local seed_iso="$GENERATED_DIR/openpanel-seed.iso"
+    local password_hash
+
+    rm -rf "$seed_dir"
+    mkdir -p "$seed_dir"
+    password_hash="$(openssl passwd -6 "$password")"
+
+    cat > "$seed_dir/meta-data" <<EOF
+instance-id: $OPENPANEL_HOSTNAME
+local-hostname: $OPENPANEL_HOSTNAME
+EOF
+
+    cat > "$seed_dir/user-data" <<EOF
+#cloud-config
+autoinstall:
+  version: 1
+  identity:
+    hostname: $OPENPANEL_HOSTNAME
+    username: $OPENPANEL_SSH_USER
+    password: "$password_hash"
+  ssh:
+    install-server: true
+    allow-pw: false
+    authorized-keys:
+      - $(cat "$key_file.pub")
+  packages:
+    - qemu-guest-agent
+    - curl
+    - ca-certificates
+  network:
+    version: 2
+    ethernets:
+      ens18:
+        dhcp4: false
+        addresses:
+          - $OPENPANEL_IP/24
+        routes:
+          - to: default
+            via: $GATEWAY_IP
+        nameservers:
+          addresses:
+            - $GATEWAY_IP
+            - 1.1.1.1
+  late-commands:
+    - curtin in-target --target=/target -- systemctl enable qemu-guest-agent
+EOF
+
+    genisoimage -quiet -output "$seed_iso" -volid cidata -joliet -rock "$seed_dir"
+    echo "$seed_iso"
+}
+
+upload_iso_file() {
+    local source="$1"
+    local name="$2"
+    local storage path
+
+    storage="$(iso_storages | head -n1)"
+    [[ -n "$storage" ]] || error "No Proxmox storage with ISO content found."
+    path="$(pvesm path "$storage:iso/$name" 2>/dev/null || true)"
+    if [[ -z "$path" ]]; then
+        if [[ "$storage" == "local" ]]; then
+            path="/var/lib/vz/template/iso/$name"
+        else
+            error "Could not resolve ISO storage path for $storage:iso/$name"
+        fi
+    fi
+    mkdir -p "$(dirname "$path")"
+    cp "$source" "$path"
+    echo "$storage:iso/$name"
+}
+
+wait_for_ssh() {
+    local ip="$1" key_file="$2" user="$3"
+
+    for _ in $(seq 1 90); do
+        if ssh -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -i "$key_file" "$user@$ip" true >/dev/null 2>&1; then
+            return 0
+        fi
+        sleep 10
+    done
+    return 1
+}
+
+openpanel_ssh() {
+    local key_file="$1"
+    shift
+    ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -i "$key_file" "$OPENPANEL_SSH_USER@$OPENPANEL_IP" "$@"
+}
+
+openpanel_scp() {
+    local key_file="$1" source="$2" dest="$3"
+    scp -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -i "$key_file" "$source" "$OPENPANEL_SSH_USER@$OPENPANEL_IP:$dest"
 }
 
 lxc_config_file() {
@@ -485,6 +657,11 @@ install_openpanel_lxc() {
     local sync_env
     local sync_timer
 
+    if [[ "$OPENPANEL_PROVISION_LXC" != "true" ]]; then
+        warn "Skipping OpenPanel LXC provisioning. OpenPanel upstream does not support containers/LXCs; use a dedicated VM and set OPENPANEL_IP."
+        return
+    fi
+
     bootstrap_lxc "$ctid"
     pct_exec "$ctid" "export DEBIAN_FRONTEND=noninteractive; apt-get install -y curl python3"
 
@@ -531,6 +708,107 @@ EOF
     pct push "$ctid" "$sync_env" /etc/homelab/openpanel-npm-sync.env
     rm -f "$sync_env"
     pct_exec "$ctid" "chmod 600 /etc/homelab/openpanel-npm-sync.env && systemctl daemon-reload && systemctl enable --now sync-npm-domains.timer"
+}
+
+ensure_openpanel_vm() {
+    local vmid="$OPENPANEL_VMID"
+    local memory="$1"
+    local cores="$2"
+    local disk_storage iso_ref seed_iso seed_ref key_file password
+
+    if [[ "$OPENPANEL_PROVISION_VM" != "true" ]]; then
+        warn "Skipping OpenPanel VM provisioning because OPENPANEL_PROVISION_VM is not true."
+        return
+    fi
+
+    key_file="$(ensure_ssh_keypair)"
+    password="$(secret_file "$SECRETS_DIR/openpanel-vm-password" 24)"
+    disk_storage="$(vm_disk_storage)"
+    [[ -n "$disk_storage" ]] || error "No Proxmox storage with VM image content found."
+
+    if qm status "$vmid" >/dev/null 2>&1; then
+        info "OpenPanel VM $vmid already exists; ensuring it is running"
+        qm start "$vmid" >/dev/null 2>&1 || true
+    else
+        iso_ref="$(select_openpanel_iso)"
+        seed_iso="$(write_openpanel_seed_iso "$key_file" "$password")"
+        seed_ref="$(upload_iso_file "$seed_iso" "homelab-openpanel-seed.iso")"
+
+        info "Creating OpenPanel VM $vmid ($OPENPANEL_HOSTNAME) from $iso_ref"
+        qm create "$vmid" \
+            --name "$OPENPANEL_HOSTNAME" \
+            --memory "$memory" \
+            --cores "$cores" \
+            --cpu host \
+            --machine q35 \
+            --scsihw virtio-scsi-pci \
+            --scsi0 "$disk_storage:${OPENPANEL_DISK_GB}" \
+            --ide2 "$iso_ref,media=cdrom" \
+            --ide3 "$seed_ref,media=cdrom" \
+            --boot order=ide2 \
+            --net0 "virtio,bridge=$VM_BRIDGE" \
+            --agent enabled=1 \
+            --ostype l26 \
+            --onboot 1
+        qm start "$vmid"
+    fi
+
+    if ! wait_for_ssh "$OPENPANEL_IP" "$key_file" "$OPENPANEL_SSH_USER"; then
+        warn "OpenPanel VM is not reachable over SSH at $OPENPANEL_IP. Complete the OS install manually if the ISO did not autoinstall, then rerun this script."
+        return
+    fi
+
+    install_openpanel_vm_services "$key_file"
+}
+
+install_openpanel_vm_services() {
+    local key_file="$1"
+    local sync_env
+    local sync_timer
+
+    info "Installing OpenPanel Community Edition in VM $OPENPANEL_VMID"
+    openpanel_scp "$key_file" "$SERVICES_DIR/openpanel/install-openpanel.sh" /tmp/install-openpanel.sh
+    openpanel_ssh "$key_file" "sudo chmod +x /tmp/install-openpanel.sh && sudo /tmp/install-openpanel.sh --domain=$(quote "$OPENPANEL_ADMIN_DOMAIN") --panel-domain=$(quote "$OPENPANEL_CLIENT_PANEL_DOMAIN") --admin-port=2087 --user-port=$(quote "$OPENPANEL_CLIENT_PANEL_PORT") --skip-firewall --skip-dns-server"
+
+    info "Installing OpenPanel to NPM sync timer in VM $OPENPANEL_VMID"
+    openpanel_scp "$key_file" "$SERVICES_DIR/openpanel/sync_npm_domains.py" /tmp/sync-openpanel-npm-domains
+    openpanel_scp "$key_file" "$SERVICES_DIR/openpanel/sync-npm-domains.service" /tmp/sync-npm-domains.service
+    openpanel_ssh "$key_file" "sudo install -m 755 /tmp/sync-openpanel-npm-domains /usr/local/bin/sync-openpanel-npm-domains && sudo install -m 644 /tmp/sync-npm-domains.service /etc/systemd/system/sync-npm-domains.service && sudo mkdir -p /etc/homelab"
+
+    sync_timer="$(mktemp)"
+    cat > "$sync_timer" <<EOF
+[Unit]
+Description=Periodic OpenPanel to Nginx Proxy Manager domain sync
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=${OPENPANEL_NPM_SYNC_INTERVAL_SECONDS}s
+AccuracySec=10s
+Unit=sync-npm-domains.service
+
+[Install]
+WantedBy=timers.target
+EOF
+    openpanel_scp "$key_file" "$sync_timer" /tmp/sync-npm-domains.timer
+    rm -f "$sync_timer"
+
+    sync_env="$(mktemp)"
+    cat > "$sync_env" <<EOF
+NPM_URL=http://$PROXY_IP:81
+NPM_EMAIL=$NPM_LOGIN_EMAIL
+NPM_PASSWORD=$NPM_LOGIN_PASSWORD
+OPENPANEL_IP=$OPENPANEL_IP
+OPENPANEL_CLIENT_PANEL_DOMAIN=$OPENPANEL_CLIENT_PANEL_DOMAIN
+OPENPANEL_ADMIN_DOMAIN=$OPENPANEL_ADMIN_DOMAIN
+OPENPANEL_PUBLIC_BACKEND_PORT=$OPENPANEL_PUBLIC_BACKEND_PORT
+OPENPANEL_CLIENT_PANEL_PORT=$OPENPANEL_CLIENT_PANEL_PORT
+OPENPANEL_CLIENT_PANEL_SCHEME=$OPENPANEL_CLIENT_PANEL_SCHEME
+OPENPANEL_NPM_AUTO_CERTS=$OPENPANEL_NPM_AUTO_CERTS
+EOF
+    chmod 600 "$sync_env"
+    openpanel_scp "$key_file" "$sync_env" /tmp/openpanel-npm-sync.env
+    rm -f "$sync_env"
+    openpanel_ssh "$key_file" "sudo install -m 644 /tmp/sync-npm-domains.timer /etc/systemd/system/sync-npm-domains.timer && sudo install -m 600 /tmp/openpanel-npm-sync.env /etc/homelab/openpanel-npm-sync.env && sudo systemctl daemon-reload && sudo systemctl enable --now sync-npm-domains.timer"
 }
 
 install_proxy_lxc() {
@@ -911,7 +1189,7 @@ LXC layout:
 - Authelia auth/OIDC: $AUTH_CTID $AUTH_IP ($AUTH_HOSTNAME)
 - Headscale + Headplane: $HEADSCALE_CTID $HEADSCALE_IP ($HEADSCALE_HOSTNAME)
 - Mail/email-service: $MAIL_CTID $MAIL_IP ($MAIL_HOSTNAME)
-- OpenPanel: $OPENPANEL_CTID $OPENPANEL_IP ($OPENPANEL_HOSTNAME)
+- OpenPanel VM: $OPENPANEL_VMID $OPENPANEL_IP ($OPENPANEL_HOSTNAME)
 
 Public DNS records to create:
 - $AUTH_DOMAIN -> $public_ip
@@ -972,8 +1250,8 @@ Headplane:
 OpenPanel:
 - Client panel URL: https://$OPENPANEL_CLIENT_PANEL_DOMAIN
 - Internal admin URL: http://$OPENPANEL_ADMIN_DOMAIN
-- LXC: $OPENPANEL_CTID $OPENPANEL_IP ($OPENPANEL_HOSTNAME)
-- NPM domain sync timer: sync-npm-domains.timer in the OpenPanel LXC
+- VM: $OPENPANEL_VMID $OPENPANEL_IP ($OPENPANEL_HOSTNAME)
+- NPM domain sync timer: sync-npm-domains.timer in the OpenPanel VM
 
 Mail/email-service:
 - Repo: $EMAIL_SERVICE_REPO
@@ -1012,11 +1290,10 @@ main() {
     ensure_lxc "$AUTH_CTID" "$AUTH_HOSTNAME" "$AUTH_IP" 768 1 6 "$template"
     ensure_lxc "$HEADSCALE_CTID" "$HEADSCALE_HOSTNAME" "$HEADSCALE_IP" 768 1 6 "$template"
     ensure_lxc "$MAIL_CTID" "$MAIL_HOSTNAME" "$MAIL_IP" 5120 2 40 "$template"
-    ensure_lxc "$OPENPANEL_CTID" "$OPENPANEL_HOSTNAME" "$OPENPANEL_IP" "$openpanel_memory" "$openpanel_cores" "$OPENPANEL_DISK_GB" "$template"
 
     install_proxy_lxc "$PROXY_CTID"
     harden_npm_admin
-    install_openpanel_lxc "$OPENPANEL_CTID"
+    ensure_openpanel_vm "$openpanel_memory" "$openpanel_cores"
     install_auth_lxc "$AUTH_CTID"
     install_headscale_lxc "$HEADSCALE_CTID"
     install_mail_lxc "$MAIL_CTID"

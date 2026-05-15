@@ -17,7 +17,7 @@ PROXY_CTID="${PROXY_CTID:-110}"
 AUTH_CTID="${AUTH_CTID:-111}"
 HEADSCALE_CTID="${HEADSCALE_CTID:-112}"
 MAIL_CTID="${MAIL_CTID:-113}"
-OPENPANEL_CTID="${OPENPANEL_CTID:-114}"
+OPENPANEL_VMID="${OPENPANEL_VMID:-114}"
 PROXY_IP="${PROXY_IP:-$NETWORK_PREFIX.10}"
 MAIL_IP="${MAIL_IP:-$NETWORK_PREFIX.40}"
 MAIL_PORTS="${MAIL_PORTS:-25 110 143 465 587 993 995 4190}"
@@ -74,7 +74,8 @@ confirm() {
     cat <<EOF
 This will remove homelab-managed test resources:
 
-- LXCs: $PROXY_CTID, $AUTH_CTID, $HEADSCALE_CTID, $MAIL_CTID, $OPENPANEL_CTID
+- LXCs: $PROXY_CTID, $AUTH_CTID, $HEADSCALE_CTID, $MAIL_CTID
+- VM: $OPENPANEL_VMID
 - State/secrets: $STATE_DIR
 - DNAT/FORWARD rules forwarding public 80/443 to $PROXY_IP
 - DNAT/FORWARD rules forwarding public mail ports to $MAIL_IP
@@ -102,6 +103,21 @@ remove_lxc() {
         pct destroy "$ctid" --purge 1
     else
         info "LXC $ctid does not exist; skipping"
+    fi
+}
+
+remove_vm() {
+    local vmid="$1"
+
+    if ! command -v qm >/dev/null 2>&1; then
+        warn "qm not found; skipping VM $vmid"
+        return
+    fi
+
+    if qm status "$vmid" >/dev/null 2>&1; then
+        info "Stopping and destroying VM $vmid"
+        qm stop "$vmid" >/dev/null 2>&1 || true
+        qm destroy "$vmid" --purge 1 >/dev/null 2>&1 || true
     fi
 }
 
@@ -297,7 +313,7 @@ remove_lxc "$PROXY_CTID"
 remove_lxc "$AUTH_CTID"
 remove_lxc "$HEADSCALE_CTID"
 remove_lxc "$MAIL_CTID"
-remove_lxc "$OPENPANEL_CTID"
+remove_vm "$OPENPANEL_VMID"
 cleanup_public_proxy_rules
 cleanup_public_mail_rules
 cleanup_pve_firewall_rules

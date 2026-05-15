@@ -1,7 +1,16 @@
 # OpenPanel
 
-This service provisions an OpenPanel Community Edition LXC and keeps public
-client domains attached to Nginx Proxy Manager.
+This service contains integration assets for OpenPanel Community Edition and
+keeps public client domains attached to Nginx Proxy Manager.
+
+OpenPanel upstream explicitly does not support installation inside containers
+or LXCs. The homelab installer creates a dedicated VM, selects a Debian/Ubuntu
+ISO from Proxmox ISO storage, attaches a generated seed ISO, and then installs
+OpenPanel over SSH once the OS is reachable.
+
+If the selected installer ISO does not consume the generated unattended seed,
+complete the OS install manually with the configured static IP and rerun
+`setup-lxcs.sh`; it will continue from the SSH/OpenPanel install step.
 
 Design:
 

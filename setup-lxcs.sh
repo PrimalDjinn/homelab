@@ -445,7 +445,7 @@ ensure_openpanel_cloud_image() {
     local image="$GENERATED_DIR/openpanel-cloud.img"
 
     if [[ ! -s "$image" ]]; then
-        info "Downloading OpenPanel VM cloud image"
+        info "Downloading OpenPanel VM cloud image" >&2
         curl -fL "$OPENPANEL_CLOUD_IMAGE_URL" -o "$image"
     fi
 

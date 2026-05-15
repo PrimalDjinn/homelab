@@ -49,6 +49,11 @@ def main() -> None:
         "auth": proxy_payload(env("AUTH_DOMAIN"), env("AUTH_IP"), 9091),
         "headscale": proxy_payload(env("HEADSCALE_DOMAIN"), env("HEADSCALE_IP"), 8080),
         "headplane": proxy_payload(env("HEADPLANE_DOMAIN"), env("HEADSCALE_IP"), 3000),
+        "email": proxy_payload(env("EMAIL_APP_DOMAIN"), env("MAIL_IP"), 3001),
+        "webmail": proxy_payload(env("WEBMAIL_DOMAIN"), env("MAIL_IP"), 3000),
+        "listmonk": proxy_payload(env("LISTMONK_DOMAIN"), env("MAIL_IP"), 9000),
+        "postal": proxy_payload(env("POSTAL_DOMAIN"), env("MAIL_IP"), 5000),
+        "libredesk": proxy_payload(env("LIBREDESK_DOMAIN"), env("MAIL_IP"), 9001),
         "mail": proxy_payload(
             [
                 env("MAIL_DOMAIN"),

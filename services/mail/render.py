@@ -143,6 +143,21 @@ def write_env(path: Path) -> None:
 def write_compose_override(path: Path) -> None:
     path.write_text(
         """services:
+  app:
+    ports:
+      - "3001:3000"
+  bulwark-web:
+    ports:
+      - "3000:3000"
+  listmonk-app:
+    ports:
+      - "9000:9000"
+  postal-web:
+    ports:
+      - "5000:5000"
+  libredesk-app:
+    ports:
+      - "9001:9000"
   stalwart:
     ports:
       - "8080:8080"

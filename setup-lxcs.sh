@@ -523,7 +523,7 @@ seed_npm_proxy_hosts() {
     fi
 
     export AUTH_DOMAIN AUTH_IP HEADSCALE_DOMAIN HEADSCALE_IP HEADPLANE_DOMAIN
-    export MAIL_DOMAIN MAIL_IP AUTODISCOVER_DOMAIN AUTOCONFIG_DOMAIN MTA_STS_DOMAIN
+    export MAIL_DOMAIN EMAIL_APP_DOMAIN WEBMAIL_DOMAIN LISTMONK_DOMAIN POSTAL_DOMAIN LIBREDESK_DOMAIN MAIL_IP AUTODISCOVER_DOMAIN AUTOCONFIG_DOMAIN MTA_STS_DOMAIN
     python3 "$SERVICES_DIR/proxy/render-npm-hosts.py" --output-dir "$GENERATED_DIR/npm"
     for payload in "$GENERATED_DIR"/npm/*.json; do
         name="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["domain_names"][0])' "$payload")"
@@ -548,7 +548,7 @@ configure_npm_lets_encrypt() {
     }
 
     pct push "$ctid" "$SERVICES_DIR/proxy/configure-npm-ssl.sh" /tmp/configure-npm-ssl.sh
-    pct_exec "$ctid" "chmod +x /tmp/configure-npm-ssl.sh && NPM_URL=http://127.0.0.1:81 NPM_EMAIL=$(quote "$NPM_LOGIN_EMAIL") NPM_PASSWORD=$(quote "$NPM_LOGIN_PASSWORD") LE_EMAIL=$(quote "$LE_EMAIL") AUTH_DOMAIN=$(quote "$AUTH_DOMAIN") HEADSCALE_DOMAIN=$(quote "$HEADSCALE_DOMAIN") HEADPLANE_DOMAIN=$(quote "$HEADPLANE_DOMAIN") MAIL_DOMAIN=$(quote "$MAIL_DOMAIN") AUTODISCOVER_DOMAIN=$(quote "$AUTODISCOVER_DOMAIN") AUTOCONFIG_DOMAIN=$(quote "$AUTOCONFIG_DOMAIN") MTA_STS_DOMAIN=$(quote "$MTA_STS_DOMAIN") NPM_DNS_CHALLENGE_PROVIDER=$(quote "$NPM_DNS_CHALLENGE_PROVIDER") NPM_DNS_PROPAGATION_SECONDS=$(quote "$NPM_DNS_PROPAGATION_SECONDS") NPM_SKIP_CLOUDFLARE_DNS_TOKEN=$(quote "$NPM_SKIP_CLOUDFLARE_DNS_TOKEN") CLOUDFLARE_DNS_API_TOKEN=$(quote "$NPM_CLOUDFLARE_DNS_API_TOKEN") /tmp/configure-npm-ssl.sh" || {
+    pct_exec "$ctid" "chmod +x /tmp/configure-npm-ssl.sh && NPM_URL=http://127.0.0.1:81 NPM_EMAIL=$(quote "$NPM_LOGIN_EMAIL") NPM_PASSWORD=$(quote "$NPM_LOGIN_PASSWORD") LE_EMAIL=$(quote "$LE_EMAIL") AUTH_DOMAIN=$(quote "$AUTH_DOMAIN") HEADSCALE_DOMAIN=$(quote "$HEADSCALE_DOMAIN") HEADPLANE_DOMAIN=$(quote "$HEADPLANE_DOMAIN") MAIL_DOMAIN=$(quote "$MAIL_DOMAIN") EMAIL_APP_DOMAIN=$(quote "$EMAIL_APP_DOMAIN") WEBMAIL_DOMAIN=$(quote "$WEBMAIL_DOMAIN") LISTMONK_DOMAIN=$(quote "$LISTMONK_DOMAIN") POSTAL_DOMAIN=$(quote "$POSTAL_DOMAIN") LIBREDESK_DOMAIN=$(quote "$LIBREDESK_DOMAIN") AUTODISCOVER_DOMAIN=$(quote "$AUTODISCOVER_DOMAIN") AUTOCONFIG_DOMAIN=$(quote "$AUTOCONFIG_DOMAIN") MTA_STS_DOMAIN=$(quote "$MTA_STS_DOMAIN") NPM_DNS_CHALLENGE_PROVIDER=$(quote "$NPM_DNS_CHALLENGE_PROVIDER") NPM_DNS_PROPAGATION_SECONDS=$(quote "$NPM_DNS_PROPAGATION_SECONDS") NPM_SKIP_CLOUDFLARE_DNS_TOKEN=$(quote "$NPM_SKIP_CLOUDFLARE_DNS_TOKEN") CLOUDFLARE_DNS_API_TOKEN=$(quote "$NPM_CLOUDFLARE_DNS_API_TOKEN") /tmp/configure-npm-ssl.sh" || {
         warn "Could not automate NPM Let's Encrypt setup. Set NPM_CLOUDFLARE_DNS_API_TOKEN or CLOUDFLARE_DNS_API_TOKEN for Cloudflare DNS-01, or set NPM_SKIP_CLOUDFLARE_DNS_TOKEN=true to force HTTP-01 with DNS-only records and public port 80."
         return
     }
@@ -755,6 +755,11 @@ address=/$AUTH_DOMAIN/$PROXY_IP
 address=/$HEADSCALE_DOMAIN/$PROXY_IP
 address=/$HEADPLANE_DOMAIN/$PROXY_IP
 address=/$MAIL_DOMAIN/$MAIL_IP
+address=/$EMAIL_APP_DOMAIN/$MAIL_IP
+address=/$WEBMAIL_DOMAIN/$MAIL_IP
+address=/$LISTMONK_DOMAIN/$MAIL_IP
+address=/$POSTAL_DOMAIN/$MAIL_IP
+address=/$LIBREDESK_DOMAIN/$MAIL_IP
 address=/$AUTODISCOVER_DOMAIN/$MAIL_IP
 address=/$AUTOCONFIG_DOMAIN/$MAIL_IP
 address=/$MTA_STS_DOMAIN/$MAIL_IP
@@ -795,6 +800,11 @@ Public DNS records to create:
 - $HEADSCALE_DOMAIN -> $public_ip
 - $HEADPLANE_DOMAIN -> $public_ip
 - $MAIL_DOMAIN -> $public_ip
+- $EMAIL_APP_DOMAIN -> $public_ip
+- $WEBMAIL_DOMAIN -> $public_ip
+- $LISTMONK_DOMAIN -> $public_ip
+- $POSTAL_DOMAIN -> $public_ip
+- $LIBREDESK_DOMAIN -> $public_ip
 - $AUTODISCOVER_DOMAIN -> $public_ip
 - $AUTOCONFIG_DOMAIN -> $public_ip
 - $MTA_STS_DOMAIN -> $public_ip
@@ -808,6 +818,11 @@ Nginx Proxy Manager:
   - $HEADSCALE_DOMAIN -> http://$HEADSCALE_IP:8080
   - $HEADPLANE_DOMAIN -> http://$HEADSCALE_IP:3000
   - $MAIL_DOMAIN, $AUTODISCOVER_DOMAIN, $AUTOCONFIG_DOMAIN, $MTA_STS_DOMAIN -> http://$MAIL_IP:8080
+  - $EMAIL_APP_DOMAIN -> http://$MAIL_IP:3001
+  - $WEBMAIL_DOMAIN -> http://$MAIL_IP:3000
+  - $LISTMONK_DOMAIN -> http://$MAIL_IP:9000
+  - $POSTAL_DOMAIN -> http://$MAIL_IP:5000
+  - $LIBREDESK_DOMAIN -> http://$MAIL_IP:9001
 - Request Let's Encrypt certificates for those hosts using $LE_EMAIL.
 
 Authelia:
@@ -840,6 +855,8 @@ Mail/email-service:
 - Path in LXC: /opt/email-service
 - Started with: docker compose -f ./docker-compose.prod.yml -f ./docker-compose.homelab.yml --env-file .env up -d
 - Stalwart HTTP is routed through Nginx Proxy Manager to http://$MAIL_IP:8080
+- Email app dashboard is routed through Nginx Proxy Manager to http://$MAIL_IP:3001
+- Webmail is routed through Nginx Proxy Manager to http://$MAIL_IP:3000
 - Public mail ports forwarded to $MAIL_IP: $MAIL_PORTS
 - Stalwart admin user: ${STALWART_ADMIN_USER:-admin}
 - Stalwart admin password: ${STALWART_ADMIN_PASSWORD:-$(cat "$SECRETS_DIR/stalwart-admin-password" 2>/dev/null || true)}

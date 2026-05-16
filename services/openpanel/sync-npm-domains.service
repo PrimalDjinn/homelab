@@ -6,4 +6,5 @@ Wants=network-online.target
 [Service]
 Type=oneshot
 EnvironmentFile=/etc/homelab/openpanel-npm-sync.env
+TimeoutStartSec=10min
 ExecStart=/usr/local/bin/sync-openpanel-npm-domains

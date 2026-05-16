@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
 import json
+import ipaddress
 import os
 import re
 import subprocess
 import sys
 import urllib.error
+import urllib.parse
 import urllib.request
 
 
@@ -18,6 +20,14 @@ def env(name: str, default: str = "") -> str:
 
 def truthy(value: str) -> bool:
     return value.lower() in {"1", "true", "yes", "y", "on"}
+
+
+def dns_record_type(value: str) -> str:
+    try:
+        ip = ipaddress.ip_address(value)
+    except ValueError:
+        return "CNAME"
+    return "AAAA" if ip.version == 6 else "A"
 
 
 def run_opencli_domains() -> set[str]:
@@ -71,6 +81,89 @@ def api(method: str, path: str, token: str = "", payload: dict | None = None):
     except urllib.error.HTTPError as exc:
         body = exc.read().decode(errors="replace")
         raise RuntimeError(f"NPM API {method} {path} failed with HTTP {exc.code}: {body}") from exc
+
+
+def cloudflare_api(method: str, path: str, payload: dict | None = None):
+    token = env("OPENPANEL_CLOUDFLARE_DNS_API_TOKEN") or env("CLOUDFLARE_DNS_API_TOKEN")
+    if not token:
+        raise RuntimeError("Cloudflare DNS token is not configured")
+
+    data = None
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Content-Type": "application/json",
+    }
+    if payload is not None:
+        data = json.dumps(payload).encode()
+
+    request = urllib.request.Request(f"https://api.cloudflare.com/client/v4{path}", data=data, headers=headers, method=method)
+    try:
+        with urllib.request.urlopen(request, timeout=30) as response:
+            body = response.read().decode()
+    except urllib.error.HTTPError as exc:
+        body = exc.read().decode(errors="replace")
+        raise RuntimeError(f"Cloudflare API {method} {path} failed with HTTP {exc.code}: {body}") from exc
+
+    parsed = json.loads(body) if body else {}
+    if not parsed.get("success", False):
+        raise RuntimeError(f"Cloudflare API {method} {path} failed: {body}")
+    return parsed
+
+
+def domain_zone_candidates(domain: str) -> list[str]:
+    parts = domain.rstrip(".").split(".")
+    return [".".join(parts[index:]) for index in range(max(len(parts) - 1, 0))]
+
+
+def cloudflare_zone_for_domain(domain: str) -> dict | None:
+    for zone_name in domain_zone_candidates(domain):
+        query = urllib.parse.urlencode({"name": zone_name, "status": "active", "per_page": "1"})
+        response = cloudflare_api("GET", f"/zones?{query}")
+        results = response.get("result") or []
+        if results:
+            return results[0]
+    return None
+
+
+def ensure_cloudflare_record(domain: str) -> None:
+    target = env("OPENPANEL_CLOUDFLARE_DNS_TARGET")
+    if not target:
+        return
+
+    zone = cloudflare_zone_for_domain(domain)
+    if not zone:
+        print(f"No controlled Cloudflare zone found for {domain}; skipping DNS")
+        return
+
+    record_type = dns_record_type(target)
+    proxied = truthy(env("OPENPANEL_CLOUDFLARE_DNS_PROXIED", "false"))
+    ttl = int(env("OPENPANEL_CLOUDFLARE_DNS_TTL", "1"))
+    zone_id = zone["id"]
+    query = urllib.parse.urlencode({"name": domain, "per_page": "1"})
+    existing = (cloudflare_api("GET", f"/zones/{zone_id}/dns_records?{query}").get("result") or [])
+    payload = {
+        "type": record_type,
+        "name": domain,
+        "content": target,
+        "ttl": ttl,
+        "proxied": proxied,
+    }
+
+    if existing:
+        record = existing[0]
+        if (
+            record.get("type") == record_type
+            and record.get("content") == target
+            and bool(record.get("proxied", False)) == proxied
+            and int(record.get("ttl", ttl)) == ttl
+        ):
+            return
+        cloudflare_api("PUT", f"/zones/{zone_id}/dns_records/{record['id']}", payload)
+        print(f"Updated Cloudflare {record_type} record for {domain} -> {target}")
+        return
+
+    cloudflare_api("POST", f"/zones/{zone_id}/dns_records", payload)
+    print(f"Created Cloudflare {record_type} record for {domain} -> {target}")
 
 
 def npm_token() -> str:
@@ -138,6 +231,8 @@ def main() -> int:
     ensure_client_panel_host(token)
     for domain in sorted(run_opencli_domains()):
         ensure_proxy_host(token, domain)
+        if env("OPENPANEL_CLOUDFLARE_DNS_API_TOKEN") or env("CLOUDFLARE_DNS_API_TOKEN"):
+            ensure_cloudflare_record(domain)
 
     if truthy(env("OPENPANEL_NPM_AUTO_CERTS", "false")):
         print("OPENPANEL_NPM_AUTO_CERTS is reserved for a later verified certificate workflow", file=sys.stderr)

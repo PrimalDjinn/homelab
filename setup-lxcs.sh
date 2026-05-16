@@ -90,6 +90,10 @@ OPENPANEL_CLIENT_PANEL_PORT="${OPENPANEL_CLIENT_PANEL_PORT:-2083}"
 OPENPANEL_CLIENT_PANEL_SCHEME="${OPENPANEL_CLIENT_PANEL_SCHEME:-http}"
 OPENPANEL_NPM_SYNC_INTERVAL_SECONDS="${OPENPANEL_NPM_SYNC_INTERVAL_SECONDS:-60}"
 OPENPANEL_NPM_AUTO_CERTS="${OPENPANEL_NPM_AUTO_CERTS:-false}"
+OPENPANEL_CLOUDFLARE_DNS_API_TOKEN="${OPENPANEL_CLOUDFLARE_DNS_API_TOKEN:-${CLOUDFLARE_DNS_API_TOKEN:-}}"
+OPENPANEL_CLOUDFLARE_DNS_TARGET="${OPENPANEL_CLOUDFLARE_DNS_TARGET:-}"
+OPENPANEL_CLOUDFLARE_DNS_PROXIED="${OPENPANEL_CLOUDFLARE_DNS_PROXIED:-false}"
+OPENPANEL_CLOUDFLARE_DNS_TTL="${OPENPANEL_CLOUDFLARE_DNS_TTL:-1}"
 STATE_DIR="${STATE_DIR:-/root/homelab}"
 SECRETS_DIR="$STATE_DIR/secrets"
 GENERATED_DIR="$STATE_DIR/generated"
@@ -788,6 +792,7 @@ install_openpanel_lxc() {
     local ctid="$1"
     local sync_env
     local sync_timer
+    local cloudflare_dns_target
 
     if [[ "$OPENPANEL_PROVISION_LXC" != "true" ]]; then
         warn "Skipping OpenPanel LXC provisioning. OpenPanel upstream does not support containers/LXCs; use a dedicated VM and set OPENPANEL_IP."
@@ -823,6 +828,7 @@ EOF
     pct push "$ctid" "$sync_timer" /etc/systemd/system/sync-npm-domains.timer
     rm -f "$sync_timer"
 
+    cloudflare_dns_target="${OPENPANEL_CLOUDFLARE_DNS_TARGET:-$(get_ip)}"
     sync_env="$(mktemp)"
     cat > "$sync_env" <<EOF
 NPM_URL=http://$PROXY_IP:81
@@ -835,6 +841,10 @@ OPENPANEL_PUBLIC_BACKEND_PORT=$OPENPANEL_PUBLIC_BACKEND_PORT
 OPENPANEL_CLIENT_PANEL_PORT=$OPENPANEL_CLIENT_PANEL_PORT
 OPENPANEL_CLIENT_PANEL_SCHEME=$OPENPANEL_CLIENT_PANEL_SCHEME
 OPENPANEL_NPM_AUTO_CERTS=$OPENPANEL_NPM_AUTO_CERTS
+OPENPANEL_CLOUDFLARE_DNS_API_TOKEN=$OPENPANEL_CLOUDFLARE_DNS_API_TOKEN
+OPENPANEL_CLOUDFLARE_DNS_TARGET=$cloudflare_dns_target
+OPENPANEL_CLOUDFLARE_DNS_PROXIED=$OPENPANEL_CLOUDFLARE_DNS_PROXIED
+OPENPANEL_CLOUDFLARE_DNS_TTL=$OPENPANEL_CLOUDFLARE_DNS_TTL
 EOF
     chmod 600 "$sync_env"
     pct push "$ctid" "$sync_env" /etc/homelab/openpanel-npm-sync.env
@@ -887,6 +897,7 @@ install_openpanel_vm_services() {
     local key_file="$1"
     local sync_env
     local sync_timer
+    local cloudflare_dns_target
 
     info "Installing OpenPanel Community Edition in VM $OPENPANEL_VMID"
     openpanel_scp "$key_file" "$SERVICES_DIR/openpanel/install-openpanel.sh" /tmp/install-openpanel.sh
@@ -914,6 +925,7 @@ EOF
     openpanel_scp "$key_file" "$sync_timer" /tmp/sync-npm-domains.timer
     rm -f "$sync_timer"
 
+    cloudflare_dns_target="${OPENPANEL_CLOUDFLARE_DNS_TARGET:-$(get_ip)}"
     sync_env="$(mktemp)"
     cat > "$sync_env" <<EOF
 NPM_URL=http://$PROXY_IP:81
@@ -926,6 +938,10 @@ OPENPANEL_PUBLIC_BACKEND_PORT=$OPENPANEL_PUBLIC_BACKEND_PORT
 OPENPANEL_CLIENT_PANEL_PORT=$OPENPANEL_CLIENT_PANEL_PORT
 OPENPANEL_CLIENT_PANEL_SCHEME=$OPENPANEL_CLIENT_PANEL_SCHEME
 OPENPANEL_NPM_AUTO_CERTS=$OPENPANEL_NPM_AUTO_CERTS
+OPENPANEL_CLOUDFLARE_DNS_API_TOKEN=$OPENPANEL_CLOUDFLARE_DNS_API_TOKEN
+OPENPANEL_CLOUDFLARE_DNS_TARGET=$cloudflare_dns_target
+OPENPANEL_CLOUDFLARE_DNS_PROXIED=$OPENPANEL_CLOUDFLARE_DNS_PROXIED
+OPENPANEL_CLOUDFLARE_DNS_TTL=$OPENPANEL_CLOUDFLARE_DNS_TTL
 EOF
     chmod 600 "$sync_env"
     openpanel_scp "$key_file" "$sync_env" /tmp/openpanel-npm-sync.env

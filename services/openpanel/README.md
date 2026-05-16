@@ -22,3 +22,11 @@ The domain sync is intentionally conservative. It creates missing NPM proxy
 hosts for domains reported by `opencli`, but it does not delete proxy hosts.
 Certificates are left to NPM; automatic certificate creation can be enabled
 with `OPENPANEL_NPM_AUTO_CERTS=true` after DNS behavior is verified.
+
+When `OPENPANEL_CLOUDFLARE_DNS_API_TOKEN` (or the shared
+`CLOUDFLARE_DNS_API_TOKEN`) is set, the same sync also attempts to create or
+update Cloudflare DNS records for OpenPanel user domains. It only changes zones
+the token can see through Cloudflare's API; domains outside controlled zones are
+skipped. Records point to `OPENPANEL_CLOUDFLARE_DNS_TARGET`, or the detected
+Proxmox public IP when that value is empty. The token needs `Zone:Read` and
+`DNS:Edit` permissions.

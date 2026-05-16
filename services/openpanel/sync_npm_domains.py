@@ -113,7 +113,7 @@ def ensure_client_panel_host(token: str) -> None:
     payload = proxy_payload(
         domain,
         int(env("OPENPANEL_CLIENT_PANEL_PORT", "2083")),
-        env("OPENPANEL_CLIENT_PANEL_SCHEME", "https"),
+        env("OPENPANEL_CLIENT_PANEL_SCHEME", "http"),
     )
     ensure_proxy_host(token, domain, payload)
 

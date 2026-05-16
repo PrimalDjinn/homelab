@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import argparse
+import json
 import os
 import shutil
 import string
@@ -22,6 +23,23 @@ def copy_tree(src: Path, dest: Path) -> None:
     shutil.copytree(src, dest)
 
 
+def render_dns_records(dest: Path) -> None:
+    records = []
+    openpanel_admin_domain = os.environ.get("OPENPANEL_ADMIN_DOMAIN", "")
+    proxy_tailnet_ip = os.environ.get("PROXY_TAILNET_IP", "")
+
+    if openpanel_admin_domain and proxy_tailnet_ip:
+        records.append(
+            {
+                "name": openpanel_admin_domain,
+                "type": "A",
+                "value": proxy_tailnet_ip,
+            }
+        )
+
+    dest.write_text(json.dumps(records, indent=2) + "\n")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--output-dir", required=True, type=Path)
@@ -37,7 +55,7 @@ def main() -> None:
         copy_file(src / name, dest / name)
 
     copy_tree(src / "init", dest / "init")
-    copy_file(src / "config" / "dns_records.json", dest / "dns_records.json")
+    render_dns_records(dest / "dns_records.json")
     render_template(src / ".env.tpl", dest / ".env")
     copy_file(src / "config" / "headscale.yaml.tpl", dest / "headscale_config.yml")
     copy_file(src / "config" / "headplane.yaml.tpl", dest / "headplane_config.yml")

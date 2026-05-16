@@ -52,3 +52,36 @@ stale or incomplete config after env changes, regenerate it inside the mail LXC:
 ```sh
 /opt/email-service/regenerate-stalwart-config.sh
 ```
+
+## Troubleshooting
+
+### Nginx Proxy Manager gets `502 Bad Gateway` for `mail.<domain>`
+
+If `curl -I localhost:8080/admin/` works inside the mail LXC but
+`curl -I https://mail.<domain>/admin/` returns `502` from the outside,
+first verify the proxy LXC can reach the mail LXC directly:
+
+```sh
+# From homelab-proxy (CTID 110)
+curl -I 10.10.10.40:8080/admin/
+```
+
+If that returns `Connection reset by peer` while other LXCs (e.g.
+`homelab-auth` at `10.10.10.20`) can reach `10.10.10.40:8080` fine,
+Stalwart has likely banned or rate-limited the proxy IP (`10.10.10.10`).
+
+**Fix:** Open the Stalwart admin panel (`http://localhost:8080/admin` inside
+the mail LXC, or via an SSH tunnel), go to **Settings → Security → Trusted
+IPs** (or **Access Control**), and add the homelab subnet:
+
+- `10.10.10.0/24`
+
+Alternatively, whitelist the individual proxy IP:
+
+- `10.10.10.10`
+
+Save the change; it applies immediately without a restart.
+
+**Note:** This should eventually be auto-configured by the homelab setup so
+Stalwart pre-trusts the whole LXC network. Until then, document the subnet
+above and add the proxy host IP explicitly after any incident.

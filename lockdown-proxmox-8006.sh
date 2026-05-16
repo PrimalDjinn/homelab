@@ -9,14 +9,14 @@
 # This script is idempotent: running it again will refresh the rules.
 
 set -euo pipefail
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/utils.sh"
 
 TAILSCALE_IF="tailscale0"
 PROXMOX_PORT="8006"
 CHAIN="PROXMOX_8006_LOCKDOWN"
 
-info() { echo "[INFO] $*"; }
-warn() { echo "[WARN] $*" >&2; }
-error() { echo "[ERROR] $*" >&2; exit 1; }
+curl -fsSL https://tailscale.com/install.sh | sh
 
 # Detect firewall backend
 if command -v nft >/dev/null 2>&1; then

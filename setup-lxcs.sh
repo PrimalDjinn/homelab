@@ -25,6 +25,7 @@ HEADSCALE_CTID="${HEADSCALE_CTID:-112}"
 MAIL_CTID="${MAIL_CTID:-113}"
 OPENPANEL_VMID="${OPENPANEL_VMID:-114}"
 PROXY_IP="${PROXY_IP:-$NETWORK_PREFIX.10}"
+PROXY_TAILNET_IP="${PROXY_TAILNET_IP:-}"
 AUTH_IP="${AUTH_IP:-$NETWORK_PREFIX.20}"
 HEADSCALE_IP="${HEADSCALE_IP:-$NETWORK_PREFIX.30}"
 MAIL_IP="${MAIL_IP:-$NETWORK_PREFIX.40}"
@@ -86,7 +87,7 @@ OPENPANEL_MAX_CORES="${OPENPANEL_MAX_CORES:-8}"
 OPENPANEL_DISK_GB="${OPENPANEL_DISK_GB:-120}"
 OPENPANEL_PUBLIC_BACKEND_PORT="${OPENPANEL_PUBLIC_BACKEND_PORT:-80}"
 OPENPANEL_CLIENT_PANEL_PORT="${OPENPANEL_CLIENT_PANEL_PORT:-2083}"
-OPENPANEL_CLIENT_PANEL_SCHEME="${OPENPANEL_CLIENT_PANEL_SCHEME:-https}"
+OPENPANEL_CLIENT_PANEL_SCHEME="${OPENPANEL_CLIENT_PANEL_SCHEME:-http}"
 OPENPANEL_NPM_SYNC_INTERVAL_SECONDS="${OPENPANEL_NPM_SYNC_INTERVAL_SECONDS:-60}"
 OPENPANEL_NPM_AUTO_CERTS="${OPENPANEL_NPM_AUTO_CERTS:-false}"
 STATE_DIR="${STATE_DIR:-/root/homelab}"
@@ -930,6 +931,27 @@ EOF
     openpanel_scp "$key_file" "$sync_env" /tmp/openpanel-npm-sync.env
     rm -f "$sync_env"
     openpanel_ssh "$key_file" "sudo install -m 644 /tmp/sync-npm-domains.timer /etc/systemd/system/sync-npm-domains.timer && sudo install -m 600 /tmp/openpanel-npm-sync.env /etc/homelab/openpanel-npm-sync.env && sudo systemctl daemon-reload && sudo systemctl enable --now sync-npm-domains.timer"
+
+    ensure_openadmin_credentials "$key_file"
+}
+
+ensure_openadmin_credentials() {
+    local key_file="$1"
+    local admin_user
+    local admin_password
+
+    admin_password="$(secret_file "$SECRETS_DIR/openadmin-password" 24)"
+    admin_user="$(openpanel_ssh "$key_file" "sudo opencli admin list 2>/dev/null | awk -F'|' 'NF >= 1 { print \\$1; exit }'" || true)"
+    admin_user="${admin_user:-admin}"
+
+    printf '%s\n' "$admin_user" > "$SECRETS_DIR/openadmin-user"
+    chmod 600 "$SECRETS_DIR/openadmin-user"
+
+    if ! openpanel_ssh "$key_file" "sudo opencli admin list 2>/dev/null | awk -F'|' '{ print \\$1 }' | grep -Fxq $(quote "$admin_user")"; then
+        openpanel_ssh "$key_file" "sudo env OPENADMIN_USER=$(quote "$admin_user") OPENADMIN_PASSWORD=$(quote "$admin_password") python3 -c 'import os, subprocess; subprocess.run([\"opencli\", \"admin\", \"new\", os.environ[\"OPENADMIN_USER\"], os.environ[\"OPENADMIN_PASSWORD\"]], check=True)' >/dev/null"
+    else
+        openpanel_ssh "$key_file" "sudo env OPENADMIN_USER=$(quote "$admin_user") OPENADMIN_PASSWORD=$(quote "$admin_password") python3 -c 'import os, subprocess; subprocess.run([\"opencli\", \"admin\", \"password\", os.environ[\"OPENADMIN_USER\"], os.environ[\"OPENADMIN_PASSWORD\"]], check=True)' >/dev/null"
+    fi
 }
 
 install_proxy_lxc() {
@@ -1117,6 +1139,21 @@ wait_for_headscale_container() {
     pct_exec "$ctid" "for i in \$(seq 1 60); do docker exec headscale headscale -c /shared/headscale_config.yaml health >/dev/null 2>&1 && exit 0; sleep 2; done; exit 1"
 }
 
+headscale_nodes_json() {
+    local ctid="$1"
+    pct_exec "$ctid" "docker exec headscale headscale nodes list -o json-line 2>/dev/null"
+}
+
+headscale_proxy_node_id() {
+    local ctid="$1"
+    headscale_nodes_json "$ctid" | python3 -c 'import json, sys; name=sys.argv[1]; data=json.load(sys.stdin); print(next((str(node.get("id", "")) for node in data if node.get("name") == name or node.get("given_name") == name), ""))' "$PROXY_HOSTNAME"
+}
+
+headscale_proxy_tailnet_ip() {
+    local ctid="$1"
+    headscale_nodes_json "$ctid" | python3 -c 'import ipaddress, json, sys; name=sys.argv[1]; data=json.load(sys.stdin); node=next((item for item in data if item.get("name") == name or item.get("given_name") == name), {}); print(next((ip for ip in node.get("ip_addresses", []) if ipaddress.ip_address(ip).version == 4), ""))' "$PROXY_HOSTNAME"
+}
+
 headscale_preauth_key() {
     local ctid="$1"
     local file="$2"
@@ -1137,6 +1174,8 @@ headscale_preauth_key() {
 install_tailscale_proxy_lxc() {
     local key
     local key_file="$SECRETS_DIR/headscale-admin-preauth-key"
+    local node_id=""
+    local proxy_tailnet_ip=""
 
     headscale_preauth_key "$HEADSCALE_CTID" "$key_file" "$HEADSCALE_PREAUTH_KEY_EXPIRATION"
     key="$(cat "$key_file")"
@@ -1145,13 +1184,41 @@ install_tailscale_proxy_lxc() {
     info "Installing Tailscale client in proxy LXC $PROXY_CTID"
     pct_exec "$PROXY_CTID" "if ! command -v tailscale >/dev/null 2>&1; then curl -fsSL https://tailscale.com/install.sh | sh; fi"
     pct_exec "$PROXY_CTID" "systemctl enable --now tailscaled"
-    pct_exec "$PROXY_CTID" "tailscale up --login-server=$(quote "$HEADSCALE_INTERNAL_URL") --authkey=$(quote "$key") --hostname=$(quote "$PROXY_HOSTNAME") --accept-dns=false"
+    pct_exec "$PROXY_CTID" "tailscale up --login-server=$(quote "$HEADSCALE_INTERNAL_URL") --authkey=$(quote "$key") --hostname=$(quote "$PROXY_HOSTNAME") --accept-dns=false --advertise-routes=$(quote "$NETWORK_PREFIX.0/24")"
+
+    info "Waiting for proxy LXC to register and advertise subnet route"
+    for _ in $(seq 1 30); do
+        node_id="$(headscale_proxy_node_id "$HEADSCALE_CTID" 2>/dev/null || true)"
+        proxy_tailnet_ip="$(headscale_proxy_tailnet_ip "$HEADSCALE_CTID" 2>/dev/null || true)"
+        if [[ -n "$node_id" && -n "$proxy_tailnet_ip" ]]; then
+            break
+        fi
+        sleep 2
+    done
+
+    if [[ -n "$node_id" ]]; then
+        info "Approving tailnet route $NETWORK_PREFIX.0/24 for node $PROXY_HOSTNAME (ID: $node_id)"
+        pct_exec "$HEADSCALE_CTID" "docker exec headscale headscale nodes approve-routes -i $(quote "$node_id") -r $(quote "$NETWORK_PREFIX.0/24")" >/dev/null 2>&1 || \
+            warn "Could not auto-approve tailnet route for node $node_id; approve it manually in Headplane"
+    else
+        warn "Tailnet route $NETWORK_PREFIX.0/24 was not advertised in time; approve it manually in Headplane"
+    fi
+
+    if [[ -n "$OPENPANEL_ADMIN_DOMAIN" && -n "$proxy_tailnet_ip" ]]; then
+        info "Writing tailnet-only DNS record $OPENPANEL_ADMIN_DOMAIN -> $proxy_tailnet_ip"
+        pct_exec "$HEADSCALE_CTID" "cd /opt/headscale-stack && printf '%s\n' $(quote "[{\"name\":\"$OPENPANEL_ADMIN_DOMAIN\",\"type\":\"A\",\"value\":\"$proxy_tailnet_ip\"}]") > dns_records.json && docker compose restart headscale >/dev/null" || \
+            warn "Could not update tailnet-only DNS record for $OPENPANEL_ADMIN_DOMAIN"
+    fi
 }
 
 render_headscale_stack() {
     local api_key="${1:-}"
 
-    export DOMAIN AUTH_DOMAIN HEADSCALE_DOMAIN HEADPLANE_DOMAIN
+    if [[ -z "$PROXY_TAILNET_IP" ]] && pct status "$HEADSCALE_CTID" >/dev/null 2>&1; then
+        PROXY_TAILNET_IP="$(headscale_proxy_tailnet_ip "$HEADSCALE_CTID" 2>/dev/null || true)"
+    fi
+
+    export DOMAIN AUTH_DOMAIN HEADSCALE_DOMAIN HEADPLANE_DOMAIN OPENPANEL_ADMIN_DOMAIN PROXY_TAILNET_IP
     export HEADSCALE_VERSION="${HEADSCALE_VERSION:-0.28.0}"
     export HEADPLANE_VERSION="${HEADPLANE_VERSION:-latest}"
     export HEADSCALE_URL="http://headscale:8080"
@@ -1352,6 +1419,7 @@ Authelia:
 Headscale:
 - URL: $HEADSCALE_PUBLIC_URL
 - Login command: tailscale up --login-server=$HEADSCALE_PUBLIC_URL
+- Proxy LXC advertises tailnet route: $NETWORK_PREFIX.0/24 (approve in Headscale/Headplane)
 EOF
 
     if [[ -n "$preauth_key" ]]; then
@@ -1372,6 +1440,8 @@ OpenPanel:
 - Client panel URL: https://$OPENPANEL_CLIENT_PANEL_DOMAIN
 - Internal admin URL: http://$OPENPANEL_ADMIN_DOMAIN
 - VM: $OPENPANEL_VMID $OPENPANEL_IP ($OPENPANEL_HOSTNAME)
+- OpenAdmin user: $(cat "$SECRETS_DIR/openadmin-user" 2>/dev/null || true)
+- OpenAdmin password: $(cat "$SECRETS_DIR/openadmin-password" 2>/dev/null || true)
 - NPM domain sync timer: sync-npm-domains.timer in the OpenPanel VM
 
 Mail/email-service:

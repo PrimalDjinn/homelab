@@ -18,6 +18,10 @@ def env_line(name: str, value: str) -> str:
     return f'{name}="{escaped}"'
 
 
+def docker_dns_servers() -> list[str]:
+    return env("HOMELAB_DOCKER_DNS_SERVERS", env("HOMELAB_DNS_SERVERS", f"{env("HOMELAB_NETWORK_PREFIX", "10.10.10")}.1 1.1.1.1 9.9.9.9")).split()
+
+
 def write_env(path: Path) -> None:
     domain = env("DOMAIN", env("SERVER_HOST", "example.com"))
     mail_domain = env("MAIL_DOMAIN", f"mail.{domain}")
@@ -156,7 +160,10 @@ def write_env(path: Path) -> None:
 
 
 def write_compose_override(path: Path) -> None:
-    shutil.copyfile(COMPOSE_OVERRIDE_TEMPLATE, path)
+    content = COMPOSE_OVERRIDE_TEMPLATE.read_text()
+    dns_lines = "\n".join(f"      - {server}" for server in docker_dns_servers())
+    rendered = content.replace("__HOMELAB_DNS_LINES__", dns_lines)
+    path.write_text(rendered)
 
 
 def copy_stalwart_scripts(path: Path) -> None:

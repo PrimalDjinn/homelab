@@ -1,21 +1,31 @@
 services:
   app:
+    dns:
+__HOMELAB_DNS_LINES__
     ports:
       - "3001:3000"
 
   bulwark-web:
+    dns:
+__HOMELAB_DNS_LINES__
     ports:
       - "3000:3000"
 
   listmonk-app:
+    dns:
+__HOMELAB_DNS_LINES__
     ports:
       - "9000:9000"
 
   postal-web:
+    dns:
+__HOMELAB_DNS_LINES__
     ports:
       - "5000:5000"
 
   libredesk-app:
+    dns:
+__HOMELAB_DNS_LINES__
     ports:
       - "9001:9000"
 
@@ -28,6 +38,8 @@ services:
       - STALWART_CONFIG_DIR=/etc/stalwart
     env_file:
       - .env
+    dns:
+__HOMELAB_DNS_LINES__
     volumes:
       - ./scripts/stalwart-homelab:/scripts:ro
       - stalwart_config_data:/etc/stalwart
@@ -40,6 +52,8 @@ services:
       - STALWART_DB_PASSWORD=${STALWART_DB_PASSWORD:?STALWART_DB_PASSWORD is required}
       - STALWART_PUBLIC_URL=https://${STALWART_HOSTNAME:?STALWART_HOSTNAME is required}
       - STALWART_RECOVERY_ADMIN=${STALWART_ADMIN_USER:-admin}:${STALWART_ADMIN_PASSWORD:?STALWART_ADMIN_PASSWORD is required}
+    dns:
+__HOMELAB_DNS_LINES__
     volumes:
       - stalwart_config_data:/etc/stalwart
       - stalwart_runtime_data:/var/lib/stalwart

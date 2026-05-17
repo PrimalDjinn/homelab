@@ -13,6 +13,10 @@ fi
 VM_BRIDGE="${HOMELAB_BRIDGE:-vmbr10}"
 NETWORK_PREFIX="${HOMELAB_NETWORK_PREFIX:-10.10.10}"
 GATEWAY_IP="${HOMELAB_GATEWAY_IP:-$NETWORK_PREFIX.1}"
+HOMELAB_IPV6_MODE="${HOMELAB_IPV6_MODE:-disabled}"
+HOMELAB_FORCE_IPV4="${HOMELAB_FORCE_IPV4:-true}"
+HOMELAB_DNS_SERVERS="${HOMELAB_DNS_SERVERS:-$GATEWAY_IP 1.1.1.1 9.9.9.9}"
+HOMELAB_DOCKER_DNS_SERVERS="${HOMELAB_DOCKER_DNS_SERVERS:-$GATEWAY_IP 1.1.1.1 9.9.9.9}"
 DHCP_START="${HOMELAB_DHCP_START:-$NETWORK_PREFIX.100}"
 DHCP_END="${HOMELAB_DHCP_END:-$NETWORK_PREFIX.200}"
 NETWORK_CIDR="${HOMELAB_NETWORK_CIDR:-$NETWORK_PREFIX.0/24}"
@@ -32,6 +36,20 @@ require_root() {
         echo "Run as root or with sudo." >&2
         exit 1
     fi
+}
+
+validate_homelab_network_mode() {
+    case "$HOMELAB_IPV6_MODE" in
+        disabled)
+            ;;
+        future)
+            echo "[!] HOMELAB_IPV6_MODE=future is a placeholder only. Bridge/NAT setup remains IPv4-only until IPv6 support is implemented."
+            ;;
+        *)
+            echo "Unsupported HOMELAB_IPV6_MODE: $HOMELAB_IPV6_MODE (allowed: disabled, future)" >&2
+            exit 1
+            ;;
+    esac
 }
 
 is_network_lock_error() {
@@ -121,7 +139,8 @@ ensure_bridge_config_file() {
     echo "[+] Adding $VM_BRIDGE to $file"
     cat <<EOF >>"$file"
 
-# === Internal Network ===
+# === Internal IPv4 Network ===
+# IPv6 for LXCs is intentionally left disabled/TODO for now.
 auto $VM_BRIDGE
 iface $VM_BRIDGE inet static
     address $GATEWAY_IP/24
@@ -193,6 +212,8 @@ enable_ip_forwarding() {
     tmp="$(mktemp)"
     cat > "$tmp" <<EOF
 # Managed by homelab setup-subnet.sh.
+# IPv4 forwarding is required for the internal bridge NAT.
+# TODO: Add IPv6 forwarding only when HOMELAB_IPV6_MODE enables real IPv6 support.
 net.ipv4.ip_forward = 1
 EOF
 
@@ -213,15 +234,17 @@ configure_dnsmasq() {
 
     tmp="$(mktemp)"
     cat <<EOF >"$tmp"
-# DNS and DHCP for Homelab Network
+# DNS and DHCP for the homelab IPv4 bridge.
+# TODO: Add IPv6 RA and/or DHCPv6 here only when IPv6 mode is implemented.
 interface=$VM_BRIDGE
 bind-dynamic
 dhcp-range=$VM_BRIDGE,$DHCP_START,$DHCP_END,24h
 dhcp-option=$VM_BRIDGE,3,$GATEWAY_IP
 dhcp-option=$VM_BRIDGE,6,$GATEWAY_IP
-server=1.1.1.1
-server=1.0.0.1
 EOF
+    for dns_server in $HOMELAB_DNS_SERVERS; do
+        echo "server=$dns_server" >>"$tmp"
+    done
 
     if write_if_changed "$DNSMASQ_CONFIG" "$tmp"; then
         echo "[+] Wrote $DNSMASQ_CONFIG"
@@ -402,6 +425,7 @@ install_pve_firewall_rules() {
 }
 
 require_root
+validate_homelab_network_mode
 
 ### 1️⃣ CREATE NETWORK BRIDGES ###
 
@@ -432,13 +456,13 @@ if [ -z "$MAIN_INTERFACE" ]; then
     exit 1
 fi
 
-# === NAT RULES FOR INTERNET ACCESS ===
-# Enable NAT for Network (vmbr10) to access internet
+# === IPv4 NAT RULES FOR INTERNET ACCESS ===
+# Keep the internal bridge IPv4-only for now.
 iptables -t nat -C POSTROUTING -s "$NETWORK_CIDR" -o "$MAIN_INTERFACE" -j MASQUERADE 2>/dev/null || \
     iptables -t nat -A POSTROUTING -s "$NETWORK_CIDR" -o "$MAIN_INTERFACE" -j MASQUERADE
 
-# === FORWARD RULES ===
-# Allow internet access from both networks
+# === IPv4 FORWARD RULES ===
+# Do not add IPv6 forwarding here until HOMELAB_IPV6_MODE has a real implementation.
 iptables -C FORWARD -i "$VM_BRIDGE" -o "$MAIN_INTERFACE" -j ACCEPT 2>/dev/null || \
     iptables -A FORWARD -i "$VM_BRIDGE" -o "$MAIN_INTERFACE" -j ACCEPT
 

@@ -1,2 +1,14 @@
 - [ ] create an auth workflow - with headscale, the reverse proxy and openpanel
 - [ ] choose an auth idp provider
+
+# IPv6 support TODO
+
+- Detect provider IPv6 prefix and gateway on the Proxmox host.
+- Add `HOMELAB_IPV6_MODE=disabled|static|slaac|routed-prefix` later.
+- Add `HOMELAB_IPV6_PREFIX`, `HOMELAB_IPV6_GATEWAY`, and per-LXC IPv6 suffix variables.
+- Have `ensure_lxc()` to append `ip6=...` and `gw6=...` only when enabled.
+- Add IPv6 forwarding sysctls on host only when enabled.
+- Add `ip6tables`/`nftables` firewall rules.
+- Add `dnsmasq` Router Advertisement or DHCPv6 support if required.
+- Add Docker IPv6 subnet config only when enabled.
+- Add tests proving IPv4-only installs do not emit AAAA-only failure paths.

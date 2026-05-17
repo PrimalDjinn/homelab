@@ -19,6 +19,12 @@ fi
 VM_BRIDGE="${HOMELAB_BRIDGE:-vmbr10}"
 NETWORK_PREFIX="${HOMELAB_NETWORK_PREFIX:-10.10.10}"
 GATEWAY_IP="${HOMELAB_GATEWAY_IP:-$NETWORK_PREFIX.1}"
+HOMELAB_IPV6_MODE="${HOMELAB_IPV6_MODE:-disabled}"
+HOMELAB_FORCE_IPV4="${HOMELAB_FORCE_IPV4:-true}"
+HOMELAB_DISABLE_IPV6_IN_LXCS="${HOMELAB_DISABLE_IPV6_IN_LXCS:-true}"
+HOMELAB_DNS_SERVERS="${HOMELAB_DNS_SERVERS:-$GATEWAY_IP 1.1.1.1 9.9.9.9}"
+HOMELAB_DOCKER_DNS_SERVERS="${HOMELAB_DOCKER_DNS_SERVERS:-$GATEWAY_IP 1.1.1.1 9.9.9.9}"
+HOMELAB_NETWORK_DIAGNOSTICS="${HOMELAB_NETWORK_DIAGNOSTICS:-false}"
 PROXY_CTID="${PROXY_CTID:-110}"
 AUTH_CTID="${AUTH_CTID:-111}"
 HEADSCALE_CTID="${HEADSCALE_CTID:-112}"
@@ -109,6 +115,88 @@ NPM_LOGIN_PASSWORD="$NPM_PASSWORD"
 
 need_cmd() {
     command -v "$1" >/dev/null 2>&1 || error "Required command missing: $1"
+}
+
+validate_homelab_network_mode() {
+    case "$HOMELAB_IPV6_MODE" in
+        disabled)
+            ;;
+        future)
+            warn "HOMELAB_IPV6_MODE=future is a placeholder only. IPv6 enablement is still TODO; keeping IPv4-only defaults."
+            ;;
+        *)
+            error "Unsupported HOMELAB_IPV6_MODE: $HOMELAB_IPV6_MODE (allowed: disabled, future)"
+            ;;
+    esac
+}
+
+docker_dns_servers_json() {
+    python3 -c 'import json, sys; print(json.dumps(sys.argv[1:]))' $HOMELAB_DOCKER_DNS_SERVERS
+}
+
+diagnose_lxc_networking() {
+    local ctid="$1"
+
+    info "Running networking diagnostics in LXC $ctid"
+    pct_exec "$ctid" 'hostname; ip -4 route; ip -6 route || true; cat /etc/resolv.conf; getent ahostsv4 google.com || true; getent ahostsv6 google.com || true; curl -4 -I https://google.com || true; curl -6 -I https://google.com || true'
+}
+
+configure_lxc_ipv4_only_networking() {
+    local ctid="$1"
+
+    info "Configuring IPv4-safe networking defaults in LXC $ctid"
+    pct_exec "$ctid" "set -eu
+touch /etc/gai.conf
+tmp_gai=\$(mktemp)
+awk '
+    /^# BEGIN HOMELAB IPV4 PREFERENCE$/ { skip = 1; next }
+    /^# END HOMELAB IPV4 PREFERENCE$/ { skip = 0; next }
+    !skip { print }
+' /etc/gai.conf > \"\$tmp_gai\"
+cat >> \"\$tmp_gai\" <<'EOF'
+# BEGIN HOMELAB IPV4 PREFERENCE
+precedence ::ffff:0:0/96  100
+# END HOMELAB IPV4 PREFERENCE
+EOF
+if ! cmp -s \"\$tmp_gai\" /etc/gai.conf; then
+    cp \"\$tmp_gai\" /etc/gai.conf
+fi
+rm -f \"\$tmp_gai\"
+
+if [[ $(quote "$HOMELAB_FORCE_IPV4") == true ]]; then
+    cat > /etc/apt/apt.conf.d/99force-ipv4 <<'EOF'
+Acquire::ForceIPv4 \"true\";
+EOF
+else
+    rm -f /etc/apt/apt.conf.d/99force-ipv4
+fi
+
+sysctl_written=false
+if [[ $(quote "$HOMELAB_DISABLE_IPV6_IN_LXCS") == true ]]; then
+    tmp_sysctl=\$(mktemp)
+    cat > \"\$tmp_sysctl\" <<'EOF'
+# Managed by homelab setup-lxcs.sh.
+net.ipv6.conf.all.disable_ipv6 = 1
+net.ipv6.conf.default.disable_ipv6 = 1
+EOF
+    if [[ ! -f /etc/sysctl.d/99-homelab-ipv4-only.conf ]] || ! cmp -s \"\$tmp_sysctl\" /etc/sysctl.d/99-homelab-ipv4-only.conf; then
+        cp \"\$tmp_sysctl\" /etc/sysctl.d/99-homelab-ipv4-only.conf
+        sysctl_written=true
+    fi
+    rm -f \"\$tmp_sysctl\"
+else
+    rm -f /etc/sysctl.d/99-homelab-ipv4-only.conf
+fi
+
+if [[ \"\$sysctl_written\" == true ]]; then
+    if ! sysctl --system; then
+        echo '[!] sysctl --system reported unavailable keys or non-fatal apply errors; continuing with IPv4 preference only.'
+    fi
+fi
+
+ip -4 route
+ip -6 route || true
+getent ahostsv4 deb.debian.org || true"
 }
 
 ensure_host_python() {
@@ -698,6 +786,7 @@ ensure_lxc() {
 bootstrap_lxc() {
     local ctid="$1"
     info "Bootstrapping base packages in LXC $ctid"
+    configure_lxc_ipv4_only_networking "$ctid"
     pct_exec "$ctid" "export DEBIAN_FRONTEND=noninteractive; apt-get update && apt-get install -y ca-certificates curl file gnupg jq openssl psmisc sqlite3 tar unattended-upgrades"
     pct_exec "$ctid" "cat > /etc/apt/apt.conf.d/20auto-upgrades <<'EOF'
 APT::Periodic::Update-Package-Lists \"1\";
@@ -717,20 +806,40 @@ systemctl enable --now unattended-upgrades"
 
 install_docker() {
     local ctid="$1"
-    if pct_exec "$ctid" "command -v docker >/dev/null 2>&1"; then
-        return
+    if ! pct_exec "$ctid" "command -v docker >/dev/null 2>&1"; then
+        info "Installing Docker in LXC $ctid"
+        pct_exec "$ctid" "curl -fsSL https://get.docker.com -o /tmp/get-docker.sh && sh /tmp/get-docker.sh"
     fi
 
-    info "Installing Docker in LXC $ctid"
-    pct_exec "$ctid" "curl -fsSL https://get.docker.com -o /tmp/get-docker.sh && sh /tmp/get-docker.sh"
-    pct_exec "$ctid" "export DEBIAN_FRONTEND=noninteractive; apt-get install -y docker-compose-plugin"
+    pct_exec "$ctid" "export DEBIAN_FRONTEND=noninteractive; apt-get install -y docker-compose-plugin python3"
     pct_exec "$ctid" "systemctl enable --now docker"
+
+    info "Configuring Docker DNS defaults in LXC $ctid"
+    pct_exec "$ctid" "mkdir -p /etc/docker && HOMELAB_DOCKER_DNS_JSON=$(quote "$(docker_dns_servers_json)") python3 - <<'PY'
+import json
+import os
+from pathlib import Path
+
+path = Path('/etc/docker/daemon.json')
+data = {}
+if path.exists():
+    try:
+        data = json.loads(path.read_text())
+    except json.JSONDecodeError as exc:
+        raise SystemExit(f'Existing /etc/docker/daemon.json is invalid JSON: {exc}')
+
+data['ipv6'] = False
+data['dns'] = json.loads(os.environ['HOMELAB_DOCKER_DNS_JSON'])
+path.write_text(json.dumps(data, indent=2, sort_keys=True) + '\n')
+PY
+systemctl restart docker"
 }
 
 export_mail_env() {
     export DOMAIN MAIL_DOMAIN EMAIL_APP_DOMAIN WEBMAIL_DOMAIN LISTMONK_DOMAIN POSTAL_DOMAIN
     export LIBREDESK_DOMAIN AUTODISCOVER_DOMAIN AUTOCONFIG_DOMAIN MTA_STS_DOMAIN LE_EMAIL
     export CLOUDFLARE_DNS_API_TOKEN STALWART_ACME_ENABLED STALWART_ACME_DNS_PROVIDER STALWART_ACME_DNS_CF_SECRET
+    export HOMELAB_DNS_SERVERS HOMELAB_DOCKER_DNS_SERVERS
 
     export EMAIL_POSTGRES_USER="${EMAIL_POSTGRES_USER:-email_service}"
     export EMAIL_POSTGRES_PASSWORD="${EMAIL_POSTGRES_PASSWORD:-$(secret_file "$SECRETS_DIR/email-postgres-password" 32)}"
@@ -787,6 +896,10 @@ install_mail_lxc() {
 
     info "Starting email-service production stack in LXC $ctid"
     pct_exec "$ctid" "cd /opt/email-service && docker compose -f ./docker-compose.prod.yml -f ./docker-compose.homelab.yml --env-file .env up -d && docker compose -f ./docker-compose.prod.yml -f ./docker-compose.homelab.yml --env-file .env up -d --force-recreate stalwart"
+
+    if [[ "$HOMELAB_NETWORK_DIAGNOSTICS" == "true" ]]; then
+        diagnose_lxc_networking "$ctid"
+    fi
 }
 
 install_openpanel_lxc() {
@@ -992,6 +1105,10 @@ install_proxy_lxc() {
     pct push "$ctid" "$GENERATED_DIR/proxy/start.sh" /opt/nginx-proxy-manager/start.sh
     pct push "$ctid" "$GENERATED_DIR/proxy/README.md" /opt/nginx-proxy-manager/README.md
     pct_exec "$ctid" "chmod +x /opt/nginx-proxy-manager/start.sh && /opt/nginx-proxy-manager/start.sh"
+
+    if [[ "$HOMELAB_NETWORK_DIAGNOSTICS" == "true" ]]; then
+        diagnose_lxc_networking "$ctid"
+    fi
 }
 
 harden_npm_admin() {
@@ -1154,6 +1271,10 @@ install_auth_lxc() {
 
     copy_dir_to_lxc "$ctid" "$GENERATED_DIR/authelia" /opt/authelia
     pct_exec "$ctid" "chmod +x /opt/authelia/start.sh && chmod 600 /opt/authelia/config/*.yml && /opt/authelia/start.sh"
+
+    if [[ "$HOMELAB_NETWORK_DIAGNOSTICS" == "true" ]]; then
+        diagnose_lxc_networking "$ctid"
+    fi
 }
 
 wait_for_headscale_container() {
@@ -1297,6 +1418,10 @@ install_headscale_lxc() {
     wait_for_headscale_container "$ctid"
 
     headscale_preauth_key "$ctid" "$SECRETS_DIR/headscale-admin-preauth-key" "$HEADSCALE_PREAUTH_KEY_EXPIRATION"
+
+    if [[ "$HOMELAB_NETWORK_DIAGNOSTICS" == "true" ]]; then
+        diagnose_lxc_networking "$ctid"
+    fi
 }
 
 configure_host_dnat() {
@@ -1495,6 +1620,7 @@ main() {
     local openpanel_memory
     local openpanel_cores
     require_proxmox
+    validate_homelab_network_mode
     template="$(ensure_template)"
     validate_template_ref "$template"
     openpanel_memory="$(resolve_openpanel_memory_mb)"

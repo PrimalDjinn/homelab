@@ -83,3 +83,30 @@ sudo systemctl restart pve-cluster
 Also verify `/etc/hosts` maps the hostname to a real host IP. Proxmox services can fail when the node hostname cannot resolve cleanly.
 
 `reset.sh` removes homelab-managed LXCs, state, firewall rules, and optionally the internal network, but it does not repair a broken Proxmox installation. Fix `pve-cluster`/`/etc/pve` first, then rerun `sudo ./main.sh --all`.
+
+## Troubleshooting: `DNS resolution error: no connections available`
+
+This usually means a container resolved AAAA records, but the parent LXC still has no usable IPv6 route.
+
+Test IPv6 on the Proxmox host:
+
+```sh
+ping -6 google.com
+curl -6 https://google.com
+```
+
+Test IPv6 inside the affected LXC:
+
+```sh
+sudo pct enter 113
+ping -6 google.com
+curl -6 https://google.com
+```
+
+If the host has working IPv6 but the LXC reports `Network is unreachable`, leave IPv6 disabled for now. The homelab scripts now prefer IPv4 explicitly for LXC package installs and Docker/container DNS defaults.
+
+After applying the updated scripts, restart the affected Docker stack so it picks up the IPv4-safe DNS settings:
+
+```sh
+sudo pct exec 113 -- bash -lc "cd /opt/email-service && docker compose -f ./docker-compose.prod.yml -f ./docker-compose.homelab.yml --env-file .env up -d --force-recreate"
+```

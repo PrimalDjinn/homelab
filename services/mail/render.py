@@ -24,7 +24,7 @@ def docker_dns_servers() -> list[str]:
 
 def write_env(path: Path) -> None:
     domain = env("DOMAIN", env("SERVER_HOST", "example.com"))
-    mail_domain = env("MAIL_DOMAIN", f"mail.{domain}")
+    mail_domain = env("MAIL_DOMAIN", f"https://mail.{domain}")
     _ = env("EMAIL_APP_DOMAIN", f"email.{domain}")
     webmail_domain = env("WEBMAIL_DOMAIN", f"webmail.{domain}")
     _ = env("LISTMONK_DOMAIN", f"listmonk.{domain}")

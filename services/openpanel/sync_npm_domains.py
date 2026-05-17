@@ -279,6 +279,17 @@ def ensure_cloudflare_record(domain: str, inventory: dict[tuple[str, str], dict[
         return
 
     if existing:
+        record = existing[0]
+        if (
+            record.get("type") == record_type
+            and record.get("content") == target
+            and bool(record.get("proxied", False)) == proxied
+            and int(record.get("ttl", ttl)) == ttl
+        ):
+            cloudflare_api("PUT", f"/zones/{zone_id}/dns_records/{record['id']}", payload)
+            upsert_inventory_row(inventory, "cloudflare_dns_record", domain, record.get("id", ""), zone_id)
+            print(f"Adopted existing Cloudflare {record_type} record for {domain} -> {target}")
+            return
         print(f"Cloudflare DNS record for {domain} exists but is not homelab-managed; leaving it untouched")
         return
 

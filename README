@@ -5,6 +5,7 @@
 - Then we set up a reverse proxy LXC using Nginx Proxy Manager for the UI. The Proxmox host forwards public 80/443 to this LXC; service ports stay on the internal bridge.
 - Then we set up an auth LXC using Authelia as the OIDC provider.
 - Next is to setup Headscale and Headplane in their own LXC, using the config-init/shared-config pattern from https://github.com/PrimalDjinn/mahede.
+- Dokploy is provisioned as its own high-resource LXC and exposed through the internal Headscale/NPM path at `dokploy.<domain>`.
 
 Copy `.env.example` to `.env`, set the real domain/IP choices, then run:
 
@@ -124,3 +125,13 @@ HOMELAB_PRUNE_MANAGED_NPM_HOSTS=true
 Only hosts carrying the homelab managed marker are eligible for auto-removal. Unrelated NPM hosts are left untouched.
 
 OpenPanel's domain sync keeps its own CSV inventory for both managed NPM proxy hosts and managed Cloudflare DNS records. That inventory is used to remove only resources previously created or adopted by the sync.
+
+## Dokploy
+
+Dokploy is installed in LXC `115` by default at `10.10.10.60`. It uses all host CPU cores by default and gets the remaining auto-calculated memory after reserving RAM for the host, core LXCs, mail, and a smaller OpenPanel VM budget.
+
+The `dokploy.<domain>` route is internal/tailnet-oriented like `openadmin.<domain>`:
+
+- Headscale DNS points `dokploy.<domain>` at the proxy tailnet IP.
+- Nginx Proxy Manager forwards `dokploy.<domain>` to `http://10.10.10.60:3000`.
+- The installer does not include `dokploy.<domain>` in the public LetsEncrypt SAN set by default.

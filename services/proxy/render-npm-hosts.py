@@ -59,6 +59,7 @@ def main() -> None:
             env("OPENPANEL_CLIENT_PANEL_SCHEME") or "http",
         ),
         "openadmin": proxy_payload(env("OPENPANEL_ADMIN_DOMAIN"), env("OPENPANEL_IP"), 80),
+        "dokploy": proxy_payload(env("DOKPLOY_DOMAIN"), env("DOKPLOY_IP"), int(env("DOKPLOY_PORT") or 3000)),
         "email": proxy_payload(env("EMAIL_APP_DOMAIN"), env("MAIL_IP"), 3001),
         "webmail": proxy_payload(env("WEBMAIL_DOMAIN"), env("MAIL_IP"), 3000),
         "listmonk": proxy_payload(env("LISTMONK_DOMAIN"), env("MAIL_IP"), 9000),

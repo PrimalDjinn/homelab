@@ -31,17 +31,20 @@ AUTH_CTID="${AUTH_CTID:-111}"
 HEADSCALE_CTID="${HEADSCALE_CTID:-112}"
 MAIL_CTID="${MAIL_CTID:-113}"
 OPENPANEL_VMID="${OPENPANEL_VMID:-114}"
+DOKPLOY_CTID="${DOKPLOY_CTID:-115}"
 PROXY_IP="${PROXY_IP:-$NETWORK_PREFIX.10}"
 PROXY_TAILNET_IP="${PROXY_TAILNET_IP:-}"
 AUTH_IP="${AUTH_IP:-$NETWORK_PREFIX.20}"
 HEADSCALE_IP="${HEADSCALE_IP:-$NETWORK_PREFIX.30}"
 MAIL_IP="${MAIL_IP:-$NETWORK_PREFIX.40}"
 OPENPANEL_IP="${OPENPANEL_IP:-$NETWORK_PREFIX.50}"
+DOKPLOY_IP="${DOKPLOY_IP:-$NETWORK_PREFIX.60}"
 PROXY_HOSTNAME="${PROXY_HOSTNAME:-homelab-proxy}"
 AUTH_HOSTNAME="${AUTH_HOSTNAME:-homelab-auth}"
 HEADSCALE_HOSTNAME="${HEADSCALE_HOSTNAME:-homelab-headscale}"
 MAIL_HOSTNAME="${MAIL_HOSTNAME:-homelab-mail}"
 OPENPANEL_HOSTNAME="${OPENPANEL_HOSTNAME:-homelab-openpanel}"
+DOKPLOY_HOSTNAME="${DOKPLOY_HOSTNAME:-homelab-dokploy}"
 OPENPANEL_PROVISION_LXC="${OPENPANEL_PROVISION_LXC:-false}"
 OPENPANEL_PROVISION_VM="${OPENPANEL_PROVISION_VM:-true}"
 OPENPANEL_VM_INSTALL_METHOD="${OPENPANEL_VM_INSTALL_METHOD:-cloud-image}"
@@ -56,6 +59,7 @@ HEADSCALE_DOMAIN="${HEADSCALE_DOMAIN:-headscale.$DOMAIN}"
 HEADPLANE_DOMAIN="${HEADPLANE_DOMAIN:-headplane.$DOMAIN}"
 OPENPANEL_CLIENT_PANEL_DOMAIN="${OPENPANEL_CLIENT_PANEL_DOMAIN:-openpanel.$DOMAIN}"
 OPENPANEL_ADMIN_DOMAIN="${OPENPANEL_ADMIN_DOMAIN:-openadmin.$DOMAIN}"
+DOKPLOY_DOMAIN="${DOKPLOY_DOMAIN:-dokploy.$DOMAIN}"
 MAIL_DOMAIN="${MAIL_DOMAIN:-mail.$DOMAIN}"
 EMAIL_APP_DOMAIN="${EMAIL_APP_DOMAIN:-email.$DOMAIN}"
 WEBMAIL_DOMAIN="${WEBMAIL_DOMAIN:-webmail.$DOMAIN}"
@@ -84,14 +88,21 @@ HEADSCALE_PREAUTH_KEY_EXPIRATION="${HEADSCALE_PREAUTH_KEY_EXPIRATION:-720h}"
 HEADSCALE_PUBLIC_URL="https://$HEADSCALE_DOMAIN"
 HEADSCALE_INTERNAL_URL="http://$HEADSCALE_IP:8080"
 OPENPANEL_MEMORY_MB="${OPENPANEL_MEMORY_MB:-auto}"
-OPENPANEL_MIN_MEMORY_MB="${OPENPANEL_MIN_MEMORY_MB:-4096}"
-OPENPANEL_MAX_MEMORY_MB="${OPENPANEL_MAX_MEMORY_MB:-16384}"
+OPENPANEL_MIN_MEMORY_MB="${OPENPANEL_MIN_MEMORY_MB:-2048}"
+OPENPANEL_MAX_MEMORY_MB="${OPENPANEL_MAX_MEMORY_MB:-4096}"
 OPENPANEL_HOST_RESERVE_MB="${OPENPANEL_HOST_RESERVE_MB:-4096}"
-OPENPANEL_DIAGNOSTIC_VM_RESERVE_MB="${OPENPANEL_DIAGNOSTIC_VM_RESERVE_MB:-8192}"
+OPENPANEL_DIAGNOSTIC_VM_RESERVE_MB="${OPENPANEL_DIAGNOSTIC_VM_RESERVE_MB:-0}"
 OPENPANEL_CORES="${OPENPANEL_CORES:-auto}"
 OPENPANEL_CPU_RESERVE="${OPENPANEL_CPU_RESERVE:-2}"
-OPENPANEL_MAX_CORES="${OPENPANEL_MAX_CORES:-8}"
+OPENPANEL_MAX_CORES="${OPENPANEL_MAX_CORES:-2}"
 OPENPANEL_DISK_GB="${OPENPANEL_DISK_GB:-120}"
+DOKPLOY_MEMORY_MB="${DOKPLOY_MEMORY_MB:-auto}"
+DOKPLOY_MIN_MEMORY_MB="${DOKPLOY_MIN_MEMORY_MB:-4096}"
+DOKPLOY_HOST_RESERVE_MB="${DOKPLOY_HOST_RESERVE_MB:-4096}"
+DOKPLOY_CORES="${DOKPLOY_CORES:-auto}"
+DOKPLOY_DISK_GB="${DOKPLOY_DISK_GB:-80}"
+DOKPLOY_PORT="${DOKPLOY_PORT:-3000}"
+DOKPLOY_INSTALL_URL="${DOKPLOY_INSTALL_URL:-https://dokploy.com/install.sh}"
 OPENPANEL_PUBLIC_BACKEND_PORT="${OPENPANEL_PUBLIC_BACKEND_PORT:-80}"
 OPENPANEL_CLIENT_PANEL_PORT="${OPENPANEL_CLIENT_PANEL_PORT:-2083}"
 OPENPANEL_CLIENT_PANEL_SCHEME="${OPENPANEL_CLIENT_PANEL_SCHEME:-http}"
@@ -743,6 +754,24 @@ resolve_openpanel_memory_mb() {
     clamp_number "$available" "$OPENPANEL_MIN_MEMORY_MB" "$OPENPANEL_MAX_MEMORY_MB"
 }
 
+resolve_dokploy_memory_mb() {
+    local total reserved available
+
+    if [[ "$DOKPLOY_MEMORY_MB" != "auto" ]]; then
+        echo "$DOKPLOY_MEMORY_MB"
+        return
+    fi
+
+    total="$(host_memory_mb)"
+    reserved=$((DOKPLOY_HOST_RESERVE_MB + 768 + 768 + 768 + 5120 + OPENPANEL_MAX_MEMORY_MB))
+    available=$((total - reserved))
+    if ((available < DOKPLOY_MIN_MEMORY_MB)); then
+        echo "$DOKPLOY_MIN_MEMORY_MB"
+    else
+        echo "$available"
+    fi
+}
+
 resolve_openpanel_cores() {
     local total available
 
@@ -754,6 +783,24 @@ resolve_openpanel_cores() {
     total="$(nproc)"
     available=$((total - OPENPANEL_CPU_RESERVE))
     clamp_number "$available" 1 "$OPENPANEL_MAX_CORES"
+}
+
+resolve_dokploy_cores() {
+    if [[ "$DOKPLOY_CORES" != "auto" ]]; then
+        echo "$DOKPLOY_CORES"
+        return
+    fi
+
+    nproc
+}
+
+ensure_lxc_resources() {
+    local ctid="$1" memory="$2" cores="$3"
+
+    if pct status "$ctid" >/dev/null 2>&1; then
+        info "Ensuring LXC $ctid has memory=$memory MB and cores=$cores"
+        pct set "$ctid" --memory "$memory" --cores "$cores" >/dev/null
+    fi
 }
 
 ensure_lxc() {
@@ -1012,6 +1059,7 @@ ensure_openpanel_vm() {
 
     if qm status "$vmid" >/dev/null 2>&1; then
         info "OpenPanel VM $vmid already exists; ensuring it is running"
+        qm set "$vmid" --memory "$memory" --cores "$cores" >/dev/null
         qm start "$vmid" >/dev/null 2>&1 || true
     else
         case "$OPENPANEL_VM_INSTALL_METHOD" in
@@ -1225,12 +1273,28 @@ seed_npm_proxy_hosts() {
     fi
 
     export AUTH_DOMAIN AUTH_IP HEADSCALE_DOMAIN HEADSCALE_IP HEADPLANE_DOMAIN OPENPANEL_CLIENT_PANEL_DOMAIN OPENPANEL_IP OPENPANEL_CLIENT_PANEL_PORT OPENPANEL_CLIENT_PANEL_SCHEME
+    export DOKPLOY_DOMAIN DOKPLOY_IP DOKPLOY_PORT
     export MAIL_DOMAIN EMAIL_APP_DOMAIN WEBMAIL_DOMAIN LISTMONK_DOMAIN POSTAL_DOMAIN LIBREDESK_DOMAIN MAIL_IP AUTODISCOVER_DOMAIN AUTOCONFIG_DOMAIN MTA_STS_DOMAIN
     python3 "$SERVICES_DIR/proxy/render-npm-hosts.py" --output-dir "$GENERATED_DIR/npm"
     pct push "$ctid" "$SERVICES_DIR/proxy/sync_npm_hosts.py" "$sync_script"
     copy_dir_to_lxc "$ctid" "$GENERATED_DIR/npm" /tmp/homelab-npm-hosts
     pct_exec "$ctid" "chmod +x $sync_script && NPM_URL=http://127.0.0.1:81 NPM_EMAIL=$(quote "$NPM_LOGIN_EMAIL") NPM_PASSWORD=$(quote "$NPM_LOGIN_PASSWORD") HOMELAB_PRUNE_MANAGED_NPM_HOSTS=$(quote "$HOMELAB_PRUNE_MANAGED_NPM_HOSTS") python3 $sync_script --payload-dir /tmp/homelab-npm-hosts" || \
         warn "Could not reconcile Nginx Proxy Manager proxy hosts automatically; review the NPM UI or container logs."
+}
+
+install_dokploy_lxc() {
+    local ctid="$1"
+
+    bootstrap_lxc "$ctid"
+    install_docker "$ctid"
+    pct_exec "$ctid" "export DEBIAN_FRONTEND=noninteractive; apt-get install -y curl"
+
+    info "Installing Dokploy in LXC $ctid"
+    pct_exec "$ctid" "mkdir -p /etc/homelab && if [[ -f /etc/homelab/dokploy-installed ]] || docker ps -a --format '{{.Names}}' | grep -Eq '(^dokploy$|dokploy)'; then echo 'Dokploy already appears to be installed; skipping installer'; else export ADVERTISE_ADDR=$(quote "$DOKPLOY_IP"); curl -sSL $(quote "$DOKPLOY_INSTALL_URL") | sh && touch /etc/homelab/dokploy-installed; fi"
+
+    if [[ "$HOMELAB_NETWORK_DIAGNOSTICS" == "true" ]]; then
+        diagnose_lxc_networking "$ctid"
+    fi
 }
 
 configure_npm_lets_encrypt() {
@@ -1367,10 +1431,22 @@ install_tailscale_proxy_lxc() {
         warn "Tailnet route $NETWORK_PREFIX.0/24 was not advertised in time; approve it manually in Headplane"
     fi
 
-    if [[ -n "$OPENPANEL_ADMIN_DOMAIN" && -n "$proxy_tailnet_ip" ]]; then
-        info "Writing tailnet-only DNS record $OPENPANEL_ADMIN_DOMAIN -> $proxy_tailnet_ip"
-        pct_exec "$HEADSCALE_CTID" "cd /opt/headscale-stack && printf '%s\n' $(quote "[{\"name\":\"$OPENPANEL_ADMIN_DOMAIN\",\"type\":\"A\",\"value\":\"$proxy_tailnet_ip\"}]") > dns_records.json && docker compose restart headscale >/dev/null" || \
-            warn "Could not update tailnet-only DNS record for $OPENPANEL_ADMIN_DOMAIN"
+    if [[ -n "$proxy_tailnet_ip" ]]; then
+        info "Writing tailnet-only DNS records for internal admin services -> $proxy_tailnet_ip"
+        python3 - "$OPENPANEL_ADMIN_DOMAIN" "$DOKPLOY_DOMAIN" "$proxy_tailnet_ip" <<'PY' > "$GENERATED_DIR/headscale-tailnet-dns.json"
+import json
+import sys
+
+records = [
+    {"name": domain, "type": "A", "value": sys.argv[3]}
+    for domain in sys.argv[1:3]
+    if domain
+]
+print(json.dumps(records, indent=2))
+PY
+        pct push "$HEADSCALE_CTID" "$GENERATED_DIR/headscale-tailnet-dns.json" /opt/headscale-stack/dns_records.json
+        pct_exec "$HEADSCALE_CTID" "cd /opt/headscale-stack && docker compose restart headscale >/dev/null" || \
+            warn "Could not update tailnet-only DNS records for internal admin services"
     fi
 }
 
@@ -1381,7 +1457,7 @@ render_headscale_stack() {
         PROXY_TAILNET_IP="$(headscale_proxy_tailnet_ip "$HEADSCALE_CTID" 2>/dev/null || true)"
     fi
 
-    export DOMAIN AUTH_DOMAIN HEADSCALE_DOMAIN HEADPLANE_DOMAIN OPENPANEL_ADMIN_DOMAIN PROXY_TAILNET_IP
+    export DOMAIN AUTH_DOMAIN HEADSCALE_DOMAIN HEADPLANE_DOMAIN OPENPANEL_ADMIN_DOMAIN DOKPLOY_DOMAIN PROXY_TAILNET_IP
     export HEADSCALE_VERSION="${HEADSCALE_VERSION:-0.28.0}"
     export HEADPLANE_VERSION="${HEADPLANE_VERSION:-latest}"
     export HEADSCALE_URL="http://headscale:8080"
@@ -1504,6 +1580,7 @@ address=/$HEADSCALE_DOMAIN/$PROXY_IP
 address=/$HEADPLANE_DOMAIN/$PROXY_IP
 address=/$OPENPANEL_CLIENT_PANEL_DOMAIN/$PROXY_IP
 address=/$OPENPANEL_ADMIN_DOMAIN/$OPENPANEL_IP
+address=/$DOKPLOY_DOMAIN/$DOKPLOY_IP
 address=/$MAIL_DOMAIN/$MAIL_IP
 address=/$EMAIL_APP_DOMAIN/$MAIL_IP
 address=/$WEBMAIL_DOMAIN/$MAIL_IP
@@ -1545,6 +1622,7 @@ LXC layout:
 - Headscale + Headplane: $HEADSCALE_CTID $HEADSCALE_IP ($HEADSCALE_HOSTNAME)
 - Mail/email-service: $MAIL_CTID $MAIL_IP ($MAIL_HOSTNAME)
 - OpenPanel VM: $OPENPANEL_VMID $OPENPANEL_IP ($OPENPANEL_HOSTNAME)
+- Dokploy: $DOKPLOY_CTID $DOKPLOY_IP ($DOKPLOY_HOSTNAME)
 
 Public DNS records to create:
 - $AUTH_DOMAIN -> $public_ip
@@ -1570,6 +1648,7 @@ Nginx Proxy Manager:
   - $HEADSCALE_DOMAIN -> http://$HEADSCALE_IP:8080
   - $HEADPLANE_DOMAIN -> http://$HEADSCALE_IP:3000
   - $OPENPANEL_CLIENT_PANEL_DOMAIN -> $OPENPANEL_CLIENT_PANEL_SCHEME://$OPENPANEL_IP:$OPENPANEL_CLIENT_PANEL_PORT
+  - $DOKPLOY_DOMAIN -> http://$DOKPLOY_IP:$DOKPLOY_PORT (tailnet/internal only)
   - $MAIL_DOMAIN, $AUTODISCOVER_DOMAIN, $AUTOCONFIG_DOMAIN, $MTA_STS_DOMAIN -> http://$MAIL_IP:8080
   - $EMAIL_APP_DOMAIN -> http://$MAIL_IP:3001
   - $WEBMAIL_DOMAIN -> http://$MAIL_IP:3000
@@ -1611,6 +1690,11 @@ OpenPanel:
 - OpenAdmin password: $(cat "$SECRETS_DIR/openadmin-password" 2>/dev/null || true)
 - NPM domain sync timer: sync-npm-domains.timer in the OpenPanel VM
 
+Dokploy:
+- Tailnet/internal URL: http://$DOKPLOY_DOMAIN
+- LXC: $DOKPLOY_CTID $DOKPLOY_IP ($DOKPLOY_HOSTNAME)
+- NPM route: http://$DOKPLOY_IP:$DOKPLOY_PORT
+
 Mail/email-service:
 - Repo: $EMAIL_SERVICE_REPO
 - Ref: $EMAIL_SERVICE_REF
@@ -1638,21 +1722,28 @@ main() {
     local template
     local openpanel_memory
     local openpanel_cores
+    local dokploy_memory
+    local dokploy_cores
     require_proxmox
     validate_homelab_network_mode
     template="$(ensure_template)"
     validate_template_ref "$template"
     openpanel_memory="$(resolve_openpanel_memory_mb)"
     openpanel_cores="$(resolve_openpanel_cores)"
+    dokploy_memory="$(resolve_dokploy_memory_mb)"
+    dokploy_cores="$(resolve_dokploy_cores)"
 
     ensure_lxc "$PROXY_CTID" "$PROXY_HOSTNAME" "$PROXY_IP" 768 1 8 "$template"
     ensure_lxc "$AUTH_CTID" "$AUTH_HOSTNAME" "$AUTH_IP" 768 1 6 "$template"
     ensure_lxc "$HEADSCALE_CTID" "$HEADSCALE_HOSTNAME" "$HEADSCALE_IP" 768 1 6 "$template"
     ensure_lxc "$MAIL_CTID" "$MAIL_HOSTNAME" "$MAIL_IP" 5120 2 40 "$template"
+    ensure_lxc "$DOKPLOY_CTID" "$DOKPLOY_HOSTNAME" "$DOKPLOY_IP" "$dokploy_memory" "$dokploy_cores" "$DOKPLOY_DISK_GB" "$template"
+    ensure_lxc_resources "$DOKPLOY_CTID" "$dokploy_memory" "$dokploy_cores"
 
     install_proxy_lxc "$PROXY_CTID"
     harden_npm_admin
     ensure_openpanel_vm "$openpanel_memory" "$openpanel_cores"
+    install_dokploy_lxc "$DOKPLOY_CTID"
     install_auth_lxc "$AUTH_CTID"
     install_headscale_lxc "$HEADSCALE_CTID"
     install_mail_lxc "$MAIL_CTID"

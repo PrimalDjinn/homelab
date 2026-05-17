@@ -26,12 +26,22 @@ def copy_tree(src: Path, dest: Path) -> None:
 def render_dns_records(dest: Path) -> None:
     records = []
     openpanel_admin_domain = os.environ.get("OPENPANEL_ADMIN_DOMAIN", "")
+    dokploy_domain = os.environ.get("DOKPLOY_DOMAIN", "")
     proxy_tailnet_ip = os.environ.get("PROXY_TAILNET_IP", "")
 
     if openpanel_admin_domain and proxy_tailnet_ip:
         records.append(
             {
                 "name": openpanel_admin_domain,
+                "type": "A",
+                "value": proxy_tailnet_ip,
+            }
+        )
+
+    if dokploy_domain and proxy_tailnet_ip:
+        records.append(
+            {
+                "name": dokploy_domain,
                 "type": "A",
                 "value": proxy_tailnet_ip,
             }

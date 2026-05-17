@@ -4,7 +4,7 @@
 # Run this after testing and confirming Headscale access works.
 #
 # Usage:
-#   sudo ./scripts/lockdown-proxmox-8006.sh
+#   sudo ./lockdown-proxmox-8006.sh
 #
 # This script is idempotent: running it again will refresh the rules.
 
@@ -12,11 +12,17 @@ set -euo pipefail
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/utils.sh"
 
-TAILSCALE_IF="tailscale0"
-PROXMOX_PORT="8006"
-CHAIN="PROXMOX_8006_LOCKDOWN"
+require_root
 
-curl -fsSL https://tailscale.com/install.sh | sh
+if [[ -f "$SCRIPT_DIR/.env" ]]; then
+    # shellcheck disable=SC1090
+    source "$SCRIPT_DIR/.env"
+fi
+
+TAILSCALE_IF="${TAILSCALE_IF:-tailscale0}"
+TAILNET_CIDR="${TAILNET_CIDR:-}"
+PROXMOX_PORT="${PROXMOX_PORT:-8006}"
+CHAIN="PROXMOX_8006_LOCKDOWN"
 
 # Detect firewall backend
 if command -v nft >/dev/null 2>&1; then
@@ -31,23 +37,30 @@ info "Using firewall backend: $BACKEND"
 
 # Verify tailscale interface exists
 if ! ip link show "$TAILSCALE_IF" >/dev/null 2>&1; then
-    error "Tailscale interface '$TAILSCALE_IF' not found. Is Tailscale/Headscale connected?"
+    error "Tailscale interface '$TAILSCALE_IF' not found. Run setup-proxmox-tailnet.sh and confirm tailnet access before locking down 8006."
 fi
 
 info "Tailscale interface detected: $TAILSCALE_IF"
 
-# Get Tailscale subnet (CIDR) from interface
-TAILSCALE_SUBNET=$(ip -4 addr show "$TAILSCALE_IF" | awk '/inet / {print $2}')
-if [[ -z "$TAILSCALE_SUBNET" ]]; then
-    error "Could not detect Tailscale subnet on $TAILSCALE_IF"
+# Get Tailscale address from interface for operator visibility.
+TAILSCALE_ADDR=$(ip -4 addr show "$TAILSCALE_IF" | awk '/inet / {print $2; exit}')
+if [[ -z "$TAILSCALE_ADDR" ]]; then
+    error "Could not detect a Tailscale IPv4 address on $TAILSCALE_IF"
 fi
 
-info "Tailscale subnet: $TAILSCALE_SUBNET"
+info "Tailscale address: $TAILSCALE_ADDR"
+if [[ -n "$TAILNET_CIDR" ]]; then
+    info "Additional allowed tailnet CIDR: $TAILNET_CIDR"
+fi
 
 # --- nftables implementation ---
 setup_nftables() {
     local table="inet filter"
-    local chain="input"
+
+    if ! nft list table inet filter >/dev/null 2>&1; then
+        nft add table inet filter
+        info "Created nftables table: inet filter"
+    fi
     
     # Create chain if it doesn't exist
     if ! nft list chain $table $CHAIN >/dev/null 2>&1; then
@@ -61,9 +74,10 @@ setup_nftables() {
     
     # Allow from Tailscale interface
     nft add rule $table $CHAIN iifname "$TAILSCALE_IF" tcp dport $PROXMOX_PORT accept
-    
-    # Allow from Tailscale subnet (in case traffic comes routed)
-    nft add rule $table $CHAIN ip saddr "$TAILSCALE_SUBNET" tcp dport $PROXMOX_PORT accept
+
+    if [[ -n "$TAILNET_CIDR" ]]; then
+        nft add rule $table $CHAIN ip saddr "$TAILNET_CIDR" tcp dport $PROXMOX_PORT accept
+    fi
     
     # Drop everything else to port 8006
     nft add rule $table $CHAIN tcp dport $PROXMOX_PORT drop
@@ -73,23 +87,24 @@ setup_nftables() {
 
 # --- iptables implementation ---
 setup_iptables() {
-    # Remove old rules if they exist (by comment marker)
-    while iptables -C INPUT -p tcp --dport $PROXMOX_PORT -m comment --comment "$CHAIN" -j DROP 2>/dev/null; do
-        iptables -D INPUT -p tcp --dport $PROXMOX_PORT -m comment --comment "$CHAIN" -j DROP
-    done
-    while iptables -C INPUT -p tcp --dport $PROXMOX_PORT -m comment --comment "$CHAIN" -j ACCEPT 2>/dev/null; do
-        iptables -D INPUT -p tcp --dport $PROXMOX_PORT -m comment --comment "$CHAIN" -j ACCEPT
+    local line
+
+    # Remove old managed rules by comment marker, regardless of interface/source match.
+    while line=$(iptables -L INPUT --line-numbers -n | awk -v marker="$CHAIN" '$0 ~ marker {print $1; exit}') && [[ -n "$line" ]]; do
+        iptables -D INPUT "$line"
     done
     
     # Insert rules at top of INPUT chain
     # 1. Accept from Tailscale interface
     iptables -I INPUT 1 -i "$TAILSCALE_IF" -p tcp --dport $PROXMOX_PORT -m comment --comment "$CHAIN" -j ACCEPT
     
-    # 2. Accept from Tailscale subnet
-    iptables -I INPUT 2 -p tcp --dport $PROXMOX_PORT -s "$TAILSCALE_SUBNET" -m comment --comment "$CHAIN" -j ACCEPT
-    
-    # 3. Drop everything else to 8006
-    iptables -I INPUT 3 -p tcp --dport $PROXMOX_PORT -m comment --comment "$CHAIN" -j DROP
+    # 2. Accept from an optional tailnet CIDR for routed traffic.
+    if [[ -n "$TAILNET_CIDR" ]]; then
+        iptables -I INPUT 2 -p tcp --dport $PROXMOX_PORT -s "$TAILNET_CIDR" -m comment --comment "$CHAIN" -j ACCEPT
+        iptables -I INPUT 3 -p tcp --dport $PROXMOX_PORT -m comment --comment "$CHAIN" -j DROP
+    else
+        iptables -I INPUT 2 -p tcp --dport $PROXMOX_PORT -m comment --comment "$CHAIN" -j DROP
+    fi
     
     info "iptables rules applied for port $PROXMOX_PORT"
 }

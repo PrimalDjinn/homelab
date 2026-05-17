@@ -3,6 +3,7 @@ import argparse
 import os
 import shutil
 from pathlib import Path
+from urllib.parse import urlparse
 
 
 COMPOSE_OVERRIDE_TEMPLATE = Path(__file__).with_name("docker-compose.homelab.yml")
@@ -18,13 +19,24 @@ def env_line(name: str, value: str) -> str:
     return f'{name}="{escaped}"'
 
 
+def hostname(value: str) -> str:
+    parsed = urlparse(value if "://" in value else f"//{value}")
+    return parsed.hostname or value.strip("/")
+
+
+def url(value: str, default_scheme: str = "https") -> str:
+    return value if "://" in value else f"{default_scheme}://{value}"
+
+
 def docker_dns_servers() -> list[str]:
-    return env("HOMELAB_DOCKER_DNS_SERVERS", env("HOMELAB_DNS_SERVERS", f"{env("HOMELAB_NETWORK_PREFIX", "10.10.10")}.1 1.1.1.1 9.9.9.9")).split()
+    network_prefix = env("HOMELAB_NETWORK_PREFIX", "10.10.10")
+    default_servers = f"{network_prefix}.1 1.1.1.1 9.9.9.9"
+    return env("HOMELAB_DOCKER_DNS_SERVERS", env("HOMELAB_DNS_SERVERS", default_servers)).split()
 
 
 def write_env(path: Path) -> None:
     domain = env("DOMAIN", env("SERVER_HOST", "example.com"))
-    mail_domain = env("MAIL_DOMAIN", f"https://mail.{domain}")
+    mail_domain = hostname(env("MAIL_DOMAIN", f"mail.{domain}"))
     _ = env("EMAIL_APP_DOMAIN", f"email.{domain}")
     webmail_domain = env("WEBMAIL_DOMAIN", f"webmail.{domain}")
     _ = env("LISTMONK_DOMAIN", f"listmonk.{domain}")
@@ -136,7 +148,7 @@ def write_env(path: Path) -> None:
         "BULWARK_IMAGE": env("BULWARK_IMAGE", "ghcr.io/bulwarkmail/webmail:latest"),
         "BULWARK_HOSTNAME": "0.0.0.0",
         "BULWARK_PORT": "3000",
-        "BULWARK_JMAP_SERVER_URL": f"{mail_domain}",
+        "BULWARK_JMAP_SERVER_URL": url(env("BULWARK_JMAP_SERVER_URL", "http://stalwart:8080")),
         "BULWARK_SESSION_SECRET": env("BULWARK_SESSION_SECRET"),
         "BULWARK_WEBMAIL_HOSTNAME": webmail_domain,
         "BULWARK_OAUTH_ENABLED": env("BULWARK_OAUTH_ENABLED", "false"),

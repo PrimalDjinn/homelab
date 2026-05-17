@@ -21,6 +21,7 @@ DHCP_START="${HOMELAB_DHCP_START:-$NETWORK_PREFIX.100}"
 DHCP_END="${HOMELAB_DHCP_END:-$NETWORK_PREFIX.200}"
 NETWORK_CIDR="${HOMELAB_NETWORK_CIDR:-$NETWORK_PREFIX.0/24}"
 ENABLE_PVE_FIREWALL="${HOMELAB_ENABLE_PVE_FIREWALL:-true}"
+PUBLIC_PROXMOX_8006="${HOMELAB_PUBLIC_PROXMOX_8006:-false}"
 WIREGUARD_PORT="${WIREGUARD_PORT:-51820}"
 TAILSCALE_WIREGUARD_PORT="${TAILSCALE_WIREGUARD_PORT:-41641}"
 MAIL_PORTS="${MAIL_PORTS:-25 110 143 465 587 993 995 4190}"
@@ -298,7 +299,6 @@ configure_pve_firewall() {
     rules_file="$(mktemp)"
     cat > "$rules_file" <<EOF
 IN ACCEPT -p tcp -dport 22 -log nolog # HOMELAB SSH
-IN ACCEPT -p tcp -dport 8006 -log nolog # HOMELAB Proxmox Web UI
 IN ACCEPT -p tcp -dport 80 -log nolog # HOMELAB HTTP reverse proxy
 IN ACCEPT -p tcp -dport 443 -log nolog # HOMELAB HTTPS reverse proxy
 IN ACCEPT -p tcp -dport 5900:5999 -log nolog # HOMELAB Proxmox VNC
@@ -309,6 +309,12 @@ IN ACCEPT -p tcp -i $VM_BRIDGE -dport 53 -log nolog # HOMELAB internal DNS
 IN ACCEPT -p udp -i $VM_BRIDGE -dport 53 -log nolog # HOMELAB internal DNS
 IN ACCEPT -p udp -i $VM_BRIDGE -dport 67 -log nolog # HOMELAB internal DHCP
 EOF
+    if [[ "$PUBLIC_PROXMOX_8006" == "true" ]]; then
+        echo "IN ACCEPT -p tcp -dport 8006 -log nolog # HOMELAB Proxmox Web UI" >> "$rules_file"
+    else
+        echo "[+] Public Proxmox Web UI on 8006 remains closed. Run setup-proxmox-tailnet.sh and lockdown-proxmox-8006.sh for tailnet-only access."
+    fi
+
     for port in $MAIL_PORTS; do
         echo "IN ACCEPT -p tcp -dport $port -log nolog # HOMELAB mail port $port" >> "$rules_file"
     done

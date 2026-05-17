@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+import csv
 import json
 import ipaddress
 import os
@@ -12,8 +13,10 @@ import urllib.request
 
 DOMAIN_RE = re.compile(r"\b(?=.{1,253}\b)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}\b", re.I)
 MANAGED_MARKER = "# homelab-openpanel-managed"
+DNS_MANAGED_COMMENT = "homelab-openpanel-managed"
 CONFIG_FILE_TLDS = {"conf", "cfg", "ini", "local", "localhost"}
 CLOUDFLARE_ZONES_CACHE: list[dict] | None = None
+INVENTORY_HEADERS = ("kind", "domain", "resource_id", "zone_id")
 
 
 def env(name: str, default: str = "") -> str:
@@ -30,6 +33,52 @@ def truthy(value: str) -> bool:
 
 def csv_env(name: str) -> list[str]:
     return [item.strip().lower().rstrip(".") for item in env(name).split(",") if item.strip()]
+
+
+def inventory_path() -> str:
+    return env("OPENPANEL_MANAGED_RESOURCES_CSV", "/etc/homelab/openpanel-managed-resources.csv")
+
+
+def load_inventory() -> dict[tuple[str, str], dict[str, str]]:
+    path = inventory_path()
+    if not os.path.exists(path):
+        return {}
+
+    with open(path, newline="") as handle:
+        rows = csv.DictReader(handle)
+        return {
+            (row.get("kind", ""), row.get("domain", "")): {
+                "kind": row.get("kind", ""),
+                "domain": row.get("domain", ""),
+                "resource_id": row.get("resource_id", ""),
+                "zone_id": row.get("zone_id", ""),
+            }
+            for row in rows
+            if row.get("kind") and row.get("domain")
+        }
+
+
+def save_inventory(inventory: dict[tuple[str, str], dict[str, str]]) -> None:
+    path = inventory_path()
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=INVENTORY_HEADERS)
+        writer.writeheader()
+        for key in sorted(inventory):
+            writer.writerow(inventory[key])
+
+
+def upsert_inventory_row(inventory: dict[tuple[str, str], dict[str, str]], kind: str, domain: str, resource_id: str | int, zone_id: str = "") -> None:
+    inventory[(kind, domain)] = {
+        "kind": kind,
+        "domain": domain,
+        "resource_id": str(resource_id),
+        "zone_id": str(zone_id),
+    }
+
+
+def remove_inventory_row(inventory: dict[tuple[str, str], dict[str, str]], kind: str, domain: str) -> None:
+    inventory.pop((kind, domain), None)
 
 
 def dns_record_type(value: str) -> str:
@@ -178,7 +227,7 @@ def cloudflare_zone_for_domain(domain: str) -> dict | None:
     return next((zone for zone in zones if domain_matches_zone(domain, zone.get("name") or "")), None)
 
 
-def ensure_cloudflare_record(domain: str) -> None:
+def ensure_cloudflare_record(domain: str, inventory: dict[tuple[str, str], dict[str, str]]) -> None:
     target = env("OPENPANEL_CLOUDFLARE_DNS_TARGET")
     if not target:
         return
@@ -193,29 +242,48 @@ def ensure_cloudflare_record(domain: str) -> None:
     ttl = int(env("OPENPANEL_CLOUDFLARE_DNS_TTL", "1"))
     zone_id = zone["id"]
     query = urllib.parse.urlencode({"name": domain, "per_page": "1"})
-    existing = (cloudflare_api("GET", f"/zones/{zone_id}/dns_records?{query}").get("result") or [])
+    existing = cloudflare_api("GET", f"/zones/{zone_id}/dns_records?{query}").get("result") or []
+    inventory_row = inventory.get(("cloudflare_dns_record", domain))
+    managed_record = next(
+        (
+            record
+            for record in existing
+            if record.get("comment") == DNS_MANAGED_COMMENT
+            or (inventory_row and str(record.get("id")) == inventory_row.get("resource_id"))
+        ),
+        None,
+    )
     payload = {
         "type": record_type,
         "name": domain,
         "content": target,
         "ttl": ttl,
         "proxied": proxied,
+        "comment": DNS_MANAGED_COMMENT,
     }
 
-    if existing:
-        record = existing[0]
+    if managed_record:
+        record = managed_record
         if (
             record.get("type") == record_type
             and record.get("content") == target
             and bool(record.get("proxied", False)) == proxied
             and int(record.get("ttl", ttl)) == ttl
+            and record.get("comment") == DNS_MANAGED_COMMENT
         ):
+            upsert_inventory_row(inventory, "cloudflare_dns_record", domain, record.get("id", ""), zone_id)
             return
         cloudflare_api("PUT", f"/zones/{zone_id}/dns_records/{record['id']}", payload)
+        upsert_inventory_row(inventory, "cloudflare_dns_record", domain, record.get("id", ""), zone_id)
         print(f"Updated Cloudflare {record_type} record for {domain} -> {target}")
         return
 
-    cloudflare_api("POST", f"/zones/{zone_id}/dns_records", payload)
+    if existing:
+        print(f"Cloudflare DNS record for {domain} exists but is not homelab-managed; leaving it untouched")
+        return
+
+    created = cloudflare_api("POST", f"/zones/{zone_id}/dns_records", payload).get("result") or {}
+    upsert_inventory_row(inventory, "cloudflare_dns_record", domain, created.get("id", ""), zone_id)
     print(f"Created Cloudflare {record_type} record for {domain} -> {target}")
 
 
@@ -322,7 +390,7 @@ def attach_certificate(token: str, host: dict, cert_id: int) -> None:
     print(f"Attached NPM certificate {cert_id} to {', '.join(payload['domain_names'])}")
 
 
-def ensure_client_panel_host(token: str) -> dict | None:
+def ensure_client_panel_host(token: str, inventory: dict[tuple[str, str], dict[str, str]]) -> dict | None:
     domain = env("OPENPANEL_CLIENT_PANEL_DOMAIN").lower()
     if not domain:
         return None
@@ -332,27 +400,67 @@ def ensure_client_panel_host(token: str) -> dict | None:
         int(env("OPENPANEL_CLIENT_PANEL_PORT", "2083")),
         env("OPENPANEL_CLIENT_PANEL_SCHEME", "http"),
     )
-    return ensure_proxy_host(token, domain, payload)
+    return ensure_proxy_host(token, domain, inventory, payload)
 
 
-def ensure_proxy_host(token: str, domain: str, payload: dict | None = None) -> dict:
+def ensure_proxy_host(token: str, domain: str, inventory: dict[tuple[str, str], dict[str, str]], payload: dict | None = None) -> dict:
     hosts = api("GET", "/api/nginx/proxy-hosts", token) or []
     existing = next((host for host in hosts if domain in (host.get("domain_names") or [])), None)
     if existing:
+        if MANAGED_MARKER in (existing.get("advanced_config") or ""):
+            upsert_inventory_row(inventory, "npm_proxy_host", domain, existing.get("id", ""))
         return existing
 
     created = api("POST", "/api/nginx/proxy-hosts", token, payload or proxy_payload(domain))
+    upsert_inventory_row(inventory, "npm_proxy_host", domain, created.get("id", ""))
     print(f"Created NPM proxy host for {domain}")
     return created
 
 
-def sync_public_domain(token: str, domain: str) -> None:
-    host = ensure_proxy_host(token, domain)
+def sync_public_domain(token: str, domain: str, inventory: dict[tuple[str, str], dict[str, str]]) -> None:
+    host = ensure_proxy_host(token, domain, inventory)
     if env("OPENPANEL_CLOUDFLARE_DNS_API_TOKEN") or env("CLOUDFLARE_DNS_API_TOKEN"):
-        ensure_cloudflare_record(domain)
+        ensure_cloudflare_record(domain, inventory)
     if truthy(env("OPENPANEL_NPM_AUTO_CERTS", "true")):
         cert_id = ensure_certificate(token, domain)
         attach_certificate(token, host, cert_id)
+
+
+def remove_stale_managed_proxy_hosts(token: str, desired_domains: set[str], inventory: dict[tuple[str, str], dict[str, str]]) -> None:
+    hosts = api("GET", "/api/nginx/proxy-hosts", token) or []
+    for host in hosts:
+        domains = host.get("domain_names") or []
+        primary_domain = domains[0] if domains else ""
+        if not primary_domain or primary_domain in desired_domains:
+            continue
+        if MANAGED_MARKER not in (host.get("advanced_config") or ""):
+            continue
+        api("DELETE", f"/api/nginx/proxy-hosts/{host['id']}", token)
+        remove_inventory_row(inventory, "npm_proxy_host", primary_domain)
+        print(f"Removed stale managed NPM proxy host for {primary_domain}")
+
+
+def remove_stale_managed_dns_records(desired_domains: set[str], inventory: dict[tuple[str, str], dict[str, str]]) -> None:
+    stale_domains = [domain for kind, domain in inventory if kind == "cloudflare_dns_record" and domain not in desired_domains]
+    for domain in stale_domains:
+        row = inventory.get(("cloudflare_dns_record", domain))
+        if not row or not row.get("zone_id") or not row.get("resource_id"):
+            remove_inventory_row(inventory, "cloudflare_dns_record", domain)
+            continue
+
+        try:
+            record = cloudflare_api("GET", f"/zones/{row['zone_id']}/dns_records/{row['resource_id']}").get("result") or {}
+        except RuntimeError:
+            remove_inventory_row(inventory, "cloudflare_dns_record", domain)
+            continue
+
+        if record.get("comment") != DNS_MANAGED_COMMENT:
+            print(f"Cloudflare DNS record for {domain} is no longer marked as homelab-managed; leaving it untouched")
+            continue
+
+        cloudflare_api("DELETE", f"/zones/{row['zone_id']}/dns_records/{row['resource_id']}")
+        remove_inventory_row(inventory, "cloudflare_dns_record", domain)
+        print(f"Removed stale managed Cloudflare DNS record for {domain}")
 
 
 def main() -> int:
@@ -362,9 +470,23 @@ def main() -> int:
         raise RuntimeError(f"Missing required environment variables: {', '.join(missing)}")
 
     token = npm_token()
-    ensure_client_panel_host(token)
-    for domain in sorted(run_opencli_domains()):
-        sync_public_domain(token, domain)
+    inventory = load_inventory()
+    desired_domains = set(run_opencli_domains())
+    client_panel_domain = env("OPENPANEL_CLIENT_PANEL_DOMAIN").lower()
+    desired_proxy_domains = set(desired_domains)
+    if client_panel_domain:
+        desired_proxy_domains.add(client_panel_domain)
+
+    client_host = ensure_client_panel_host(token, inventory)
+    if client_host and client_panel_domain:
+        upsert_inventory_row(inventory, "npm_proxy_host", client_panel_domain, client_host.get("id", ""))
+
+    for domain in sorted(desired_domains):
+        sync_public_domain(token, domain, inventory)
+
+    remove_stale_managed_proxy_hosts(token, desired_proxy_domains, inventory)
+    remove_stale_managed_dns_records(desired_domains, inventory)
+    save_inventory(inventory)
 
     if truthy(env("OPENPANEL_NPM_AUTO_CERTS", "true")):
         print("OpenPanel NPM auto certificates are enabled", file=sys.stderr)

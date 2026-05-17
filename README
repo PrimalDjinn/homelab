@@ -110,3 +110,17 @@ After applying the updated scripts, restart the affected Docker stack so it pick
 ```sh
 sudo pct exec 113 -- bash -lc "cd /opt/email-service && docker compose -f ./docker-compose.prod.yml -f ./docker-compose.homelab.yml --env-file .env up -d --force-recreate"
 ```
+
+## Managed NPM And DNS
+
+Homelab-created Nginx Proxy Manager hosts are marked with `# homelab-managed` in `advanced_config` and tracked in a CSV inventory inside the proxy LXC.
+
+Reruns reconcile those homelab hosts in place. If you want stale homelab-managed proxy hosts removed automatically, enable:
+
+```sh
+HOMELAB_PRUNE_MANAGED_NPM_HOSTS=true
+```
+
+Only hosts carrying the homelab managed marker are eligible for auto-removal. Unrelated NPM hosts are left untouched.
+
+OpenPanel's domain sync keeps its own CSV inventory for both managed NPM proxy hosts and managed Cloudflare DNS records. That inventory is used to remove only resources previously created or adopted by the sync.

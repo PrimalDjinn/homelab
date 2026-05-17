@@ -30,6 +30,7 @@ DNSMASQ_CONFIG="/etc/dnsmasq.d/proxmox-networks.conf"
 SYSCTL_CONFIG="/etc/sysctl.d/99-homelab-ip-forward.conf"
 INTERFACES_FILE="/etc/network/interfaces"
 INTERFACES_PENDING_FILE="/etc/network/interfaces.new"
+INTERFACES_BACKUP_FILE="/etc/network/interfaces.bak.homelab"
 
 require_root() {
     if [[ $EUID -ne 0 ]]; then
@@ -429,8 +430,12 @@ validate_homelab_network_mode
 
 ### 1️⃣ CREATE NETWORK BRIDGES ###
 
-echo "[+] Backing up /etc/network/interfaces"
-cp "$INTERFACES_FILE" "$INTERFACES_FILE.bak.$(date +%F-%H-%M)"
+if [[ ! -f "$INTERFACES_BACKUP_FILE" ]]; then
+    echo "[+] Backing up /etc/network/interfaces to $INTERFACES_BACKUP_FILE"
+    cp "$INTERFACES_FILE" "$INTERFACES_BACKUP_FILE"
+else
+    echo "[+] Reusing existing backup at $INTERFACES_BACKUP_FILE"
+fi
 
 ensure_persistent_bridge_config
 

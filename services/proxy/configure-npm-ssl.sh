@@ -30,6 +30,8 @@ for domain in "$MAIL_DOMAIN" "$EMAIL_APP_DOMAIN" "$WEBMAIL_DOMAIN" "$LISTMONK_DO
 done
 cert_domains_json="$(printf '%s\n' "${CERT_DOMAINS[@]}" | jq -R . | jq -s 'unique')"
 
+sorted_cert_domains_json="$(printf '%s' "$cert_domains_json" | jq -c 'sort')"
+
 truthy() {
     case "${1,,}" in
         1|true|yes|y|on) return 0 ;;
@@ -84,23 +86,53 @@ if [[ -z "$token" ]]; then
     exit 1
 fi
 
-domain_filter='
-    map(select(
-        . as $cert
-        | $cert.provider == "letsencrypt"
-        and ([$domains[] | (($cert.domain_names // []) | index(.))] | all)
-    ))
-    | sort_by(.id)
-    | last
-    | .id // empty
-'
+find_matching_certificate_id() {
+    local certificates_json="$1"
 
-cert_id="$(
-    api GET /api/nginx/certificates "$token" |
+    printf '%s' "$certificates_json" |
         jq -r \
-            --argjson domains "$cert_domains_json" \
-            "$domain_filter"
-)"
+            --argjson domains "$sorted_cert_domains_json" \
+            '
+                map(select(
+                    .provider == "letsencrypt"
+                    and (((.domain_names // []) | unique | sort) == $domains)
+                ))
+                | sort_by(.id)
+                | last
+                | .id // empty
+            '
+}
+
+find_proxy_host() {
+    local hosts_json="$1"
+    local domain="$2"
+
+    printf '%s' "$hosts_json" |
+        jq -c --arg domain "$domain" '.[] | select((.domain_names // []) | index($domain))' |
+        head -n1
+}
+
+assert_proxy_host_certificate() {
+    local hosts_json="$1"
+    local domain="$2"
+    local expected_cert_id="$3"
+    local host cert_id
+
+    host="$(find_proxy_host "$hosts_json" "$domain")"
+    if [[ -z "$host" ]]; then
+        printf 'Expected NPM proxy host for %s was not found during certificate verification.\n' "$domain" >&2
+        return 1
+    fi
+
+    cert_id="$(printf '%s' "$host" | jq -r '.certificate_id // 0')"
+    if [[ "$cert_id" != "$expected_cert_id" ]]; then
+        printf 'NPM proxy host for %s is bound to certificate %s, expected %s.\n' "$domain" "$cert_id" "$expected_cert_id" >&2
+        return 1
+    fi
+}
+
+certificates="$(api GET /api/nginx/certificates "$token")"
+cert_id="$(find_matching_certificate_id "$certificates")"
 
 if [[ -z "$cert_id" ]]; then
     if use_dns_challenge; then
@@ -150,11 +182,7 @@ fi
 
 hosts="$(api GET /api/nginx/proxy-hosts "$token")"
 for domain in "${CERT_DOMAINS[@]}"; do
-    host="$(
-        printf '%s' "$hosts" |
-            jq -c --arg domain "$domain" '.[] | select((.domain_names // []) | index($domain))' |
-            head -n1
-    )"
+    host="$(find_proxy_host "$hosts" "$domain")"
     if [[ -z "$host" ]]; then
         printf 'No NPM proxy host found for %s; skipping certificate attach.\n' "$domain" >&2
         continue
@@ -185,6 +213,11 @@ for domain in "${CERT_DOMAINS[@]}"; do
                 }'
     )"
     api PUT "/api/nginx/proxy-hosts/$host_id" "$token" "$update_payload" >/dev/null
+done
+
+hosts="$(api GET /api/nginx/proxy-hosts "$token")"
+for domain in "${CERT_DOMAINS[@]}"; do
+    assert_proxy_host_certificate "$hosts" "$domain" "$cert_id"
 done
 
 printf 'NPM certificate %s is attached to homelab proxy hosts.\n' "$cert_id"

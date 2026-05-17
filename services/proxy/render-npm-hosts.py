@@ -6,6 +6,9 @@ import shutil
 from pathlib import Path
 
 
+MANAGED_MARKER = "# homelab-managed"
+
+
 def env(name: str) -> str:
     return os.environ.get(name, "")
 
@@ -31,7 +34,7 @@ def proxy_payload(domain: str | list[str], host: str, port: int, scheme: str = "
             "letsencrypt_agree": False,
             "dns_challenge": False,
         },
-        "advanced_config": "",
+        "advanced_config": MANAGED_MARKER,
     }
 
 

@@ -25,6 +25,7 @@ HOMELAB_DISABLE_IPV6_IN_LXCS="${HOMELAB_DISABLE_IPV6_IN_LXCS:-true}"
 HOMELAB_DNS_SERVERS="${HOMELAB_DNS_SERVERS:-$GATEWAY_IP 1.1.1.1 9.9.9.9}"
 HOMELAB_DOCKER_DNS_SERVERS="${HOMELAB_DOCKER_DNS_SERVERS:-$GATEWAY_IP 1.1.1.1 9.9.9.9}"
 HOMELAB_NETWORK_DIAGNOSTICS="${HOMELAB_NETWORK_DIAGNOSTICS:-false}"
+HOMELAB_PRUNE_MANAGED_NPM_HOSTS="${HOMELAB_PRUNE_MANAGED_NPM_HOSTS:-false}"
 PROXY_CTID="${PROXY_CTID:-110}"
 AUTH_CTID="${AUTH_CTID:-111}"
 HEADSCALE_CTID="${HEADSCALE_CTID:-112}"
@@ -185,7 +186,17 @@ EOF
     fi
     rm -f \"\$tmp_sysctl\"
 else
+    had_sysctl_file=false
+    [[ -f /etc/sysctl.d/99-homelab-ipv4-only.conf ]] && had_sysctl_file=true
     rm -f /etc/sysctl.d/99-homelab-ipv4-only.conf
+    if [[ \"\$had_sysctl_file\" == true ]]; then
+        if ! sysctl -w net.ipv6.conf.all.disable_ipv6=0 >/dev/null 2>&1; then
+            echo '[!] Could not restore net.ipv6.conf.all.disable_ipv6=0; key may be unavailable in this LXC.'
+        fi
+        if ! sysctl -w net.ipv6.conf.default.disable_ipv6=0 >/dev/null 2>&1; then
+            echo '[!] Could not restore net.ipv6.conf.default.disable_ipv6=0; key may be unavailable in this LXC.'
+        fi
+    fi
 fi
 
 if [[ \"\$sysctl_written\" == true ]]; then
@@ -806,9 +817,12 @@ systemctl enable --now unattended-upgrades"
 
 install_docker() {
     local ctid="$1"
+    local docker_installed_now="false"
+
     if ! pct_exec "$ctid" "command -v docker >/dev/null 2>&1"; then
         info "Installing Docker in LXC $ctid"
         pct_exec "$ctid" "curl -fsSL https://get.docker.com -o /tmp/get-docker.sh && sh /tmp/get-docker.sh"
+        docker_installed_now="true"
     fi
 
     pct_exec "$ctid" "export DEBIAN_FRONTEND=noninteractive; apt-get install -y docker-compose-plugin python3"
@@ -819,6 +833,7 @@ install_docker() {
 import json
 import os
 from pathlib import Path
+import sys
 
 path = Path('/etc/docker/daemon.json')
 data = {}
@@ -830,9 +845,19 @@ if path.exists():
 
 data['ipv6'] = False
 data['dns'] = json.loads(os.environ['HOMELAB_DOCKER_DNS_JSON'])
-path.write_text(json.dumps(data, indent=2, sort_keys=True) + '\n')
+rendered = json.dumps(data, indent=2, sort_keys=True) + '\n'
+if path.exists() and path.read_text() == rendered:
+    sys.exit(0)
+
+path.write_text(rendered)
+sys.exit(10)
 PY
-systemctl restart docker"
+daemon_status=\$?
+if [[ $(quote "$docker_installed_now") == true || \$daemon_status -eq 10 ]]; then
+    systemctl restart docker
+elif [[ \$daemon_status -ne 0 ]]; then
+    exit \$daemon_status
+fi"
 }
 
 export_mail_env() {
@@ -1185,6 +1210,7 @@ harden_npm_admin() {
 seed_npm_proxy_hosts() {
     local token payload name existing
     local ctid="$PROXY_CTID"
+    local sync_script="/tmp/sync-npm-hosts.py"
 
     info "Trying to seed Nginx Proxy Manager proxy hosts"
     pct_exec "$ctid" "for i in \$(seq 1 60); do curl -fsS http://127.0.0.1:81/api >/dev/null 2>&1 && exit 0; sleep 2; done; exit 1" || {
@@ -1201,17 +1227,10 @@ seed_npm_proxy_hosts() {
     export AUTH_DOMAIN AUTH_IP HEADSCALE_DOMAIN HEADSCALE_IP HEADPLANE_DOMAIN OPENPANEL_CLIENT_PANEL_DOMAIN OPENPANEL_IP OPENPANEL_CLIENT_PANEL_PORT OPENPANEL_CLIENT_PANEL_SCHEME
     export MAIL_DOMAIN EMAIL_APP_DOMAIN WEBMAIL_DOMAIN LISTMONK_DOMAIN POSTAL_DOMAIN LIBREDESK_DOMAIN MAIL_IP AUTODISCOVER_DOMAIN AUTOCONFIG_DOMAIN MTA_STS_DOMAIN
     python3 "$SERVICES_DIR/proxy/render-npm-hosts.py" --output-dir "$GENERATED_DIR/npm"
-    for payload in "$GENERATED_DIR"/npm/*.json; do
-        name="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["domain_names"][0])' "$payload")"
-        existing="$(pct_exec "$ctid" "curl -fsS http://127.0.0.1:81/api/nginx/proxy-hosts -H 'Authorization: Bearer $(quote "$token")' | jq -r '.[] | select(.domain_names[]? == $(quote "$name")) | .id' | head -n1" 2>/dev/null || true)"
-        if [[ -n "$existing" ]]; then
-            info "Nginx Proxy Manager proxy host $name already exists; skipping seed"
-            continue
-        fi
-        pct push "$ctid" "$payload" "/tmp/$(basename "$payload")"
-        pct_exec "$ctid" "curl -fsS -X POST http://127.0.0.1:81/api/nginx/proxy-hosts -H 'Authorization: Bearer $(quote "$token")' -H 'Content-Type: application/json' --data @/tmp/$(basename "$payload") >/dev/null" || \
-            warn "Could not seed proxy host $name; it may already exist or NPM may have changed its API."
-    done
+    pct push "$ctid" "$SERVICES_DIR/proxy/sync_npm_hosts.py" "$sync_script"
+    copy_dir_to_lxc "$ctid" "$GENERATED_DIR/npm" /tmp/homelab-npm-hosts
+    pct_exec "$ctid" "chmod +x $sync_script && NPM_URL=http://127.0.0.1:81 NPM_EMAIL=$(quote "$NPM_LOGIN_EMAIL") NPM_PASSWORD=$(quote "$NPM_LOGIN_PASSWORD") HOMELAB_PRUNE_MANAGED_NPM_HOSTS=$(quote "$HOMELAB_PRUNE_MANAGED_NPM_HOSTS") python3 $sync_script --payload-dir /tmp/homelab-npm-hosts" || \
+        warn "Could not reconcile Nginx Proxy Manager proxy hosts automatically; review the NPM UI or container logs."
 }
 
 configure_npm_lets_encrypt() {

@@ -148,7 +148,7 @@ def write_env(path: Path) -> None:
         "BULWARK_IMAGE": env("BULWARK_IMAGE", "ghcr.io/bulwarkmail/webmail:latest"),
         "BULWARK_HOSTNAME": "0.0.0.0",
         "BULWARK_PORT": "3000",
-        "BULWARK_JMAP_SERVER_URL": url(env("BULWARK_JMAP_SERVER_URL", "http://stalwart:8080")),
+        "BULWARK_JMAP_SERVER_URL": url(env("BULWARK_JMAP_SERVER_URL", mail_domain)),
         "BULWARK_SESSION_SECRET": env("BULWARK_SESSION_SECRET"),
         "BULWARK_WEBMAIL_HOSTNAME": webmail_domain,
         "BULWARK_OAUTH_ENABLED": env("BULWARK_OAUTH_ENABLED", "false"),

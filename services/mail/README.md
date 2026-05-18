@@ -24,7 +24,6 @@ The homelab override uses the current Stalwart startup model. A Python generator
 ports the ChibaLLC Stalwart env surface into current Stalwart artifacts:
 
 - `/etc/stalwart/config.json`: the startup datastore pointer.
-- `/etc/stalwart/bootstrap.json`: initial setup values for the Bootstrap object.
 - `/etc/stalwart/apply-plan.ndjson`: declarative CLI operations for DB-backed
   Stalwart settings.
 
@@ -37,9 +36,10 @@ for those datastore settings; run `apply-stalwart-plan.sh` or
 `regenerate-stalwart-config.sh` to apply the safe singleton updates.
 
 The apply helper intentionally filters out destructive or bootstrap-only plan
-objects (`Bootstrap`, `AcmeProvider`, and `NetworkListener`). Listener or ACME
-provider migrations should be handled explicitly instead of rerunning a full
-destroy/create plan against an existing Stalwart datastore.
+objects (`Bootstrap`, `AcmeProvider`, and `NetworkListener`) if they appear in an
+older generated plan. Listener, bootstrap, or ACME provider migrations should be
+handled explicitly instead of rerunning a full destroy/create plan against an
+existing Stalwart datastore.
 
 Public mail DNS should include:
 

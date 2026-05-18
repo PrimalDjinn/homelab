@@ -25,11 +25,6 @@ def secret_env(name):
     return {"@type": "EnvironmentVariable", "variableName": name}
 
 
-def default_domain(hostname):
-    parts = hostname.split(".", 1)
-    return parts[1] if len(parts) == 2 else hostname
-
-
 def datastore():
     return {
         "@type": "PostgreSql",
@@ -63,43 +58,6 @@ def dns_resolver():
     return value
 
 
-def bootstrap():
-    hostname = env("STALWART_HOSTNAME", "mail.example.com")
-    return {
-        "serverHostname": hostname,
-        "defaultDomain": env("STALWART_DEFAULT_DOMAIN", default_domain(hostname)),
-        "requestTlsCertificate": env_bool("STALWART_ACME_ENABLED", False),
-        "generateDkimKeys": True,
-        "dataStore": datastore(),
-        "blobStore": {
-            "@type": "S3Compatible",
-            "bucket": env("STALWART_MINIO_BUCKET", "stalwart"),
-            "region": env("STALWART_MINIO_REGION", "us-east-1"),
-            "accessKey": env("STALWART_MINIO_ROOT_USER", "stalwart"),
-            "secretKey": secret_env("STALWART_MINIO_ROOT_PASSWORD"),
-            "endpoint": env("STALWART_MINIO_ENDPOINT", "http://stalwart-minio:9000"),
-            "keyPrefix": "stalwart/",
-        },
-        "searchStore": {"@type": "Default"},
-        "inMemoryStore": {
-            "@type": "Redis",
-            "urls": [f"redis://:{env('STALWART_REDIS_PASSWORD', 'stalwart')}@stalwart-redis:6379/0"],
-        },
-        "directory": {"@type": "Internal"},
-        "dnsServer": {"@type": "Manual"},
-    }
-
-
-def listener(name, bind, protocol, implicit_tls=False):
-    value = {"name": name, "bind": {bind: True}, "protocol": protocol}
-    trusted = csv("STALWART_PROXY_TRUSTED_NETWORKS")
-    if trusted and name in {"smtp", "submissions", "imaptls", "https"}:
-        value["overrideProxyTrustedNetworks"] = trusted
-    if implicit_tls:
-        value["tlsImplicit"] = True
-    return value
-
-
 def apply_plan():
     hostname = env("STALWART_HOSTNAME", "mail.example.com")
     http_headers = {}
@@ -114,23 +72,8 @@ def apply_plan():
             }
         )
 
-    listeners = {
-        "smtp": listener("smtp", "0.0.0.0:25", "smtp"),
-        "submission": listener("submission", "0.0.0.0:587", "smtp"),
-        "submissions": listener("submissions", "0.0.0.0:465", "smtp", True),
-        "imap": listener("imap", "0.0.0.0:143", "imap"),
-        "imaptls": listener("imaptls", "0.0.0.0:993", "imap", True),
-        "pop3": listener("pop3", "0.0.0.0:110", "pop3"),
-        "pop3s": listener("pop3s", "0.0.0.0:995", "pop3", True),
-        "sieve": listener("sieve", "0.0.0.0:4190", "manageSieve"),
-        "http": listener("http", "0.0.0.0:8080", "http"),
-    }
-
     plan = [
-        {"@type": "update", "object": "Bootstrap", "value": bootstrap()},
         {"@type": "update", "object": "DnsResolver", "value": dns_resolver()},
-        {"@type": "destroy", "object": "NetworkListener"},
-        {"@type": "create", "object": "NetworkListener", "value": listeners},
         {
             "@type": "update",
             "object": "Http",
@@ -146,34 +89,17 @@ def apply_plan():
         },
     ]
 
-    if env_bool("STALWART_ACME_ENABLED", False):
-        challenge = env("STALWART_ACME_CHALLENGE", "tls-alpn-01")
-        challenge_map = {"tls-alpn-01": "TlsAlpn01", "http-01": "Http01", "dns-01": "Dns01"}
-        acme = {
-            "challengeType": challenge_map.get(challenge, challenge),
-            "contact": csv("STALWART_ACME_CONTACT") or [f"postmaster@{default_domain(hostname)}"],
-            "domains": csv("STALWART_ACME_DOMAINS") or [hostname],
-            "renewBefore": env("STALWART_ACME_RENEW_BEFORE", "30d"),
-            "default": env_bool("STALWART_ACME_DEFAULT", True),
-        }
-        plan.extend(
-            [
-                {"@type": "destroy", "object": "AcmeProvider"},
-                {"@type": "create", "object": "AcmeProvider", "value": {"letsencrypt": acme}},
-            ]
-        )
-
     return plan
 
 
 def main():
     CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+    (CONFIG_DIR / "bootstrap.json").unlink(missing_ok=True)
     (CONFIG_DIR / "config.json").write_text(json.dumps(datastore(), indent=2) + "\n")
-    (CONFIG_DIR / "bootstrap.json").write_text(json.dumps(bootstrap(), indent=2) + "\n")
     (CONFIG_DIR / "apply-plan.ndjson").write_text(
         "\n".join(json.dumps(item, separators=(",", ":")) for item in apply_plan()) + "\n"
     )
-    print(f"Wrote Stalwart config, bootstrap, and apply plan to {CONFIG_DIR}")
+    print(f"Wrote Stalwart config and apply plan to {CONFIG_DIR}")
 
 
 if __name__ == "__main__":

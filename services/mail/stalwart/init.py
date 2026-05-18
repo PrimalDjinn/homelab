@@ -42,6 +42,27 @@ def datastore():
     }
 
 
+def dns_resolver():
+    provider = env("STALWART_DNS_RESOLVER", "cloudflare").lower()
+    resolver_type = {
+        "system": "System",
+        "cloudflare": "Cloudflare",
+        "quad9": "Quad9",
+        "google": "Google",
+    }.get(provider, "Cloudflare")
+    value = {
+        "@type": resolver_type,
+        "attempts": int(env("STALWART_DNS_ATTEMPTS", "2")),
+        "concurrency": int(env("STALWART_DNS_CONCURRENCY", "2")),
+        "enableEdns": env_bool("STALWART_DNS_ENABLE_EDNS", True),
+        "preserveIntermediates": env_bool("STALWART_DNS_PRESERVE_INTERMEDIATES", True),
+        "tcpOnError": env_bool("STALWART_DNS_TCP_ON_ERROR", True),
+    }
+    if resolver_type in {"Cloudflare", "Quad9"}:
+        value["useTls"] = env_bool("STALWART_DNS_USE_TLS", False)
+    return value
+
+
 def bootstrap():
     hostname = env("STALWART_HOSTNAME", "mail.example.com")
     return {
@@ -70,12 +91,12 @@ def bootstrap():
 
 
 def listener(name, bind, protocol, implicit_tls=False):
-    value = {"name": name, "bind": [bind], "protocol": protocol}
+    value = {"name": name, "bind": {bind: True}, "protocol": protocol}
     trusted = csv("STALWART_PROXY_TRUSTED_NETWORKS")
     if trusted and name in {"smtp", "submissions", "imaptls", "https"}:
         value["overrideProxyTrustedNetworks"] = trusted
     if implicit_tls:
-        value["useImplicitTls"] = True
+        value["tlsImplicit"] = True
     return value
 
 
@@ -88,33 +109,33 @@ def apply_plan():
             {
                 "Access-Control-Allow-Origin": origins[0],
                 "Access-Control-Allow-Methods": "GET, POST, OPTIONS, DELETE, PUT",
-                "Access-Control-Allow-Headers": "Content-Type, Authorization, Accept",
+                "Access-Control-Allow-Headers": "Content-Type, Authorization, Accept, X-Requested-With",
                 "Access-Control-Allow-Credentials": "true",
             }
         )
 
     listeners = {
-        "smtp": listener("smtp", "[::]:25", "smtp"),
-        "submission": listener("submission", "[::]:587", "smtp"),
-        "submissions": listener("submissions", "[::]:465", "smtp", True),
-        "imap": listener("imap", "[::]:143", "imap"),
-        "imaptls": listener("imaptls", "[::]:993", "imap", True),
-        "pop3": listener("pop3", "[::]:110", "pop3"),
-        "pop3s": listener("pop3s", "[::]:995", "pop3", True),
-        "sieve": listener("sieve", "[::]:4190", "managesieve"),
-        "http": listener("http", "[::]:8080", "http"),
-        "https": listener("https", "[::]:443", "http", True),
+        "smtp": listener("smtp", "0.0.0.0:25", "smtp"),
+        "submission": listener("submission", "0.0.0.0:587", "smtp"),
+        "submissions": listener("submissions", "0.0.0.0:465", "smtp", True),
+        "imap": listener("imap", "0.0.0.0:143", "imap"),
+        "imaptls": listener("imaptls", "0.0.0.0:993", "imap", True),
+        "pop3": listener("pop3", "0.0.0.0:110", "pop3"),
+        "pop3s": listener("pop3s", "0.0.0.0:995", "pop3", True),
+        "sieve": listener("sieve", "0.0.0.0:4190", "manageSieve"),
+        "http": listener("http", "0.0.0.0:8080", "http"),
     }
 
     plan = [
         {"@type": "update", "object": "Bootstrap", "value": bootstrap()},
+        {"@type": "update", "object": "DnsResolver", "value": dns_resolver()},
         {"@type": "destroy", "object": "NetworkListener"},
         {"@type": "create", "object": "NetworkListener", "value": listeners},
         {
             "@type": "update",
             "object": "Http",
             "value": {
-                "usePermissiveCors": True,
+                "usePermissiveCors": env_bool("STALWART_HTTP_PERMISSIVE_CORS", False),
                 "responseHeaders": http_headers,
             },
         },

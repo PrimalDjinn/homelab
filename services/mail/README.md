@@ -25,14 +25,35 @@ ports the ChibaLLC Stalwart env surface into current Stalwart artifacts:
 
 - `/etc/stalwart/config.json`: the startup datastore pointer.
 - `/etc/stalwart/bootstrap.json`: initial setup values for the Bootstrap object.
-- `/etc/stalwart/apply-plan.ndjson`: declarative CLI operations for listeners,
-  HTTP/CORS, system hostname, and ACME provider settings.
+- `/etc/stalwart/apply-plan.ndjson`: declarative CLI operations for DB-backed
+  Stalwart settings.
 
 Stalwart still starts with `--config /etc/stalwart/config.json`, and persistent
 state is mounted at `/etc/stalwart` and `/var/lib/stalwart`. Current Stalwart
 stores most server configuration in its datastore and manages it through the
 WebUI/API; the generated NDJSON plan is the current replacement for the old
-large `/opt/stalwart/etc/config.toml`.
+large `/opt/stalwart/etc/config.toml`. Regenerating files alone is not enough
+for those datastore settings; run `apply-stalwart-plan.sh` or
+`regenerate-stalwart-config.sh` to apply the safe singleton updates.
+
+The apply helper intentionally filters out destructive or bootstrap-only plan
+objects (`Bootstrap`, `AcmeProvider`, and `NetworkListener`). Listener or ACME
+provider migrations should be handled explicitly instead of rerunning a full
+destroy/create plan against an existing Stalwart datastore.
+
+Public mail DNS should include:
+
+- `A mail.<domain> -> <public_ip>`
+- `MX <domain> -> mail.<domain>`
+- exactly one SPF TXT record, for example
+  `v=spf1 mx include:spf.sendinblue.com ~all` when both Stalwart and Brevo send
+  mail for the domain.
+- DKIM TXT records published by Stalwart for the active domain selectors.
+- `_dmarc.<domain>` TXT, for example
+  `v=DMARC1; p=reject; rua=mailto:postmaster@<domain>`.
+
+For Gmail deliverability, also set provider reverse DNS/PTR for the public IP to
+`mail.<domain>` so forward-confirmed reverse DNS matches Stalwart's SMTP name.
 
 The email app defaults to `EMAIL_PROVIDER=nodemailer` with placeholder SMTP
 credentials so startup validation passes before the real Stalwart mailbox is

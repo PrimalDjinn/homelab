@@ -911,6 +911,8 @@ export_mail_env() {
     export DOMAIN MAIL_DOMAIN EMAIL_APP_DOMAIN WEBMAIL_DOMAIN LISTMONK_DOMAIN POSTAL_DOMAIN
     export LIBREDESK_DOMAIN AUTODISCOVER_DOMAIN AUTOCONFIG_DOMAIN MTA_STS_DOMAIN LE_EMAIL
     export CLOUDFLARE_DNS_API_TOKEN STALWART_ACME_ENABLED STALWART_ACME_DNS_PROVIDER STALWART_ACME_DNS_CF_SECRET
+    export STALWART_HTTP_PERMISSIVE_CORS
+    export STALWART_DNS_RESOLVER STALWART_DNS_USE_TLS
     export HOMELAB_DNS_SERVERS HOMELAB_DOCKER_DNS_SERVERS BULWARK_JMAP_SERVER_URL
 
     export EMAIL_POSTGRES_USER="${EMAIL_POSTGRES_USER:-email_service}"
@@ -956,9 +958,10 @@ install_mail_lxc() {
     pct push "$ctid" "$GENERATED_DIR/mail/docker-compose.homelab.yml" /opt/email-service/docker-compose.homelab.yml
     pct_exec "$ctid" "mkdir -p /opt/email-service/scripts/stalwart-homelab"
     pct push "$ctid" "$GENERATED_DIR/mail/scripts/stalwart-homelab/init.py" /opt/email-service/scripts/stalwart-homelab/init.py
+    pct push "$ctid" "$SERVICES_DIR/mail/apply-stalwart-plan.sh" /opt/email-service/apply-stalwart-plan.sh
     pct push "$ctid" "$SERVICES_DIR/mail/update-smtp-credentials.sh" /opt/email-service/update-smtp-credentials.sh
     pct push "$ctid" "$SERVICES_DIR/mail/regenerate-stalwart-config.sh" /opt/email-service/regenerate-stalwart-config.sh
-    pct_exec "$ctid" "chmod 600 /opt/email-service/.env && chmod +x /opt/email-service/update-smtp-credentials.sh /opt/email-service/regenerate-stalwart-config.sh"
+    pct_exec "$ctid" "chmod 600 /opt/email-service/.env && chmod +x /opt/email-service/apply-stalwart-plan.sh /opt/email-service/update-smtp-credentials.sh /opt/email-service/regenerate-stalwart-config.sh"
 
     info "Freeing mail ports inside LXC $ctid before starting email-service"
     free_mail_ports_in_lxc "$ctid"
@@ -968,6 +971,9 @@ install_mail_lxc() {
 
     info "Starting email-service production stack in LXC $ctid"
     pct_exec "$ctid" "cd /opt/email-service && docker compose -f ./docker-compose.prod.yml -f ./docker-compose.homelab.yml --env-file .env up -d && docker compose -f ./docker-compose.prod.yml -f ./docker-compose.homelab.yml --env-file .env up -d --force-recreate stalwart"
+
+    info "Applying Stalwart declarative configuration in LXC $ctid"
+    pct_exec "$ctid" "cd /opt/email-service && ./apply-stalwart-plan.sh"
 
     if [[ "$HOMELAB_NETWORK_DIAGNOSTICS" == "true" ]]; then
         diagnose_lxc_networking "$ctid"

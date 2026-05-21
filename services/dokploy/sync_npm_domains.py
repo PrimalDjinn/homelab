@@ -56,14 +56,14 @@ def request_json(method: str, url: str, headers: dict[str, str], payload: dict |
 
 
 def dokploy_api(method: str, path: str, payload: dict | None = None):
-    base_url = env("DOKPLOY_URL", "http://127.0.0.1:3000").rstrip("/")
+    base_url = env("DOKPLOY_URL", "http://127.0.0.1:3000/api").rstrip("/")
     token = env("DOKPLOY_API_TOKEN")
     if not token:
         raise RuntimeError("DOKPLOY_API_TOKEN is not configured")
     return request_json(
         method,
         f"{base_url}{path}",
-        {"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
+        {"x-api-key": token, "Content-Type": "application/json"},
         payload,
     )
 

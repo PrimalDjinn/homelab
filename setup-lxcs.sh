@@ -1338,7 +1338,7 @@ EOF
         cloudflare_dns_target="${DOKPLOY_CLOUDFLARE_DNS_TARGET:-$(get_ip)}"
         sync_env="$(mktemp)"
         cat > "$sync_env" <<EOF
-DOKPLOY_URL=http://127.0.0.1:${DOKPLOY_PORT}
+DOKPLOY_URL=http://127.0.0.1:${DOKPLOY_PORT}/api
 DOKPLOY_API_TOKEN=$DOKPLOY_API_TOKEN
 DOKPLOY_DOMAIN=$DOKPLOY_DOMAIN
 DOKPLOY_IP=$DOKPLOY_IP

@@ -104,6 +104,10 @@ DOKPLOY_DISK_GB="${DOKPLOY_DISK_GB:-80}"
 DOKPLOY_PORT="${DOKPLOY_PORT:-3000}"
 DOKPLOY_INSTALL_URL="${DOKPLOY_INSTALL_URL:-https://dokploy.com/install.sh}"
 DOKPLOY_API_TOKEN="${DOKPLOY_API_TOKEN:-}"
+DOKPLOY_ADMIN_EMAIL="${DOKPLOY_ADMIN_EMAIL:-admin@$DOMAIN}"
+DOKPLOY_ADMIN_PASSWORD="${DOKPLOY_ADMIN_PASSWORD:-}"
+DOKPLOY_ADMIN_FIRST_NAME="${DOKPLOY_ADMIN_FIRST_NAME:-Homelab}"
+DOKPLOY_ADMIN_LAST_NAME="${DOKPLOY_ADMIN_LAST_NAME:-Admin}"
 DOKPLOY_NPM_SYNC_INTERVAL_SECONDS="${DOKPLOY_NPM_SYNC_INTERVAL_SECONDS:-60}"
 DOKPLOY_NPM_FORWARD_SCHEME="${DOKPLOY_NPM_FORWARD_SCHEME:-http}"
 DOKPLOY_NPM_FORWARD_PORT="${DOKPLOY_NPM_FORWARD_PORT:-80}"
@@ -1302,6 +1306,7 @@ install_dokploy_lxc() {
     local sync_env
     local sync_timer
     local cloudflare_dns_target
+    local dokploy_admin_password
 
     bootstrap_lxc "$ctid"
     install_docker "$ctid"
@@ -1310,9 +1315,26 @@ install_dokploy_lxc() {
     info "Installing Dokploy in LXC $ctid"
     pct_exec "$ctid" "mkdir -p /etc/homelab && if [[ -f /etc/homelab/dokploy-installed ]] || docker ps -a --format '{{.Names}}' | grep -Eq '(^dokploy$|dokploy)'; then echo 'Dokploy already appears to be installed; skipping installer'; else export ADVERTISE_ADDR=$(quote "$DOKPLOY_IP"); curl -sSL $(quote "$DOKPLOY_INSTALL_URL") | sh && touch /etc/homelab/dokploy-installed; fi"
 
+    dokploy_admin_password="${DOKPLOY_ADMIN_PASSWORD:-$(strong_secret_file "$SECRETS_DIR/dokploy-admin-password" 24)}"
+    printf '%s\n' "$DOKPLOY_ADMIN_EMAIL" > "$SECRETS_DIR/dokploy-admin-email"
+    printf '%s\n' "$dokploy_admin_password" > "$SECRETS_DIR/dokploy-admin-password"
+    chmod 600 "$SECRETS_DIR/dokploy-admin-email"
+    chmod 600 "$SECRETS_DIR/dokploy-admin-password"
+    if [[ -n "$DOKPLOY_API_TOKEN" ]]; then
+        printf '%s\n' "$DOKPLOY_API_TOKEN" > "$SECRETS_DIR/dokploy-api-key"
+        chmod 600 "$SECRETS_DIR/dokploy-api-key"
+    fi
+
     if [[ -z "$DOKPLOY_API_TOKEN" ]]; then
-        warn "Skipping Dokploy domain sync timer because DOKPLOY_API_TOKEN is not set. Create a Dokploy API key and rerun setup-lxcs.sh to enable it."
-    else
+        info "Bootstrapping Dokploy admin/API key for domain sync"
+        pct push "$ctid" "$SERVICES_DIR/dokploy/bootstrap-api-key.sh" /usr/local/bin/bootstrap-dokploy-api-key
+        pct_exec "$ctid" "chmod +x /usr/local/bin/bootstrap-dokploy-api-key && mkdir -p /etc/homelab && DOKPLOY_URL=http://127.0.0.1:$(quote "$DOKPLOY_PORT") DOKPLOY_ADMIN_EMAIL=$(quote "$DOKPLOY_ADMIN_EMAIL") DOKPLOY_ADMIN_PASSWORD=$(quote "$dokploy_admin_password") DOKPLOY_ADMIN_FIRST_NAME=$(quote "$DOKPLOY_ADMIN_FIRST_NAME") DOKPLOY_ADMIN_LAST_NAME=$(quote "$DOKPLOY_ADMIN_LAST_NAME") /usr/local/bin/bootstrap-dokploy-api-key >/dev/null"
+        DOKPLOY_API_TOKEN="$(pct_exec "$ctid" "cat /etc/homelab/dokploy-api-key")"
+        printf '%s\n' "$DOKPLOY_API_TOKEN" > "$SECRETS_DIR/dokploy-api-key"
+        chmod 600 "$SECRETS_DIR/dokploy-api-key"
+    fi
+
+    if [[ -n "$DOKPLOY_API_TOKEN" ]]; then
         info "Installing Dokploy to NPM sync timer in LXC $ctid"
         pct push "$ctid" "$SERVICES_DIR/dokploy/sync_npm_domains.py" /usr/local/bin/sync-dokploy-npm-domains
         pct push "$ctid" "$SERVICES_DIR/dokploy/sync-npm-domains.service" /etc/systemd/system/sync-dokploy-npm-domains.service
@@ -1762,6 +1784,10 @@ Dokploy:
 - Tailnet/internal URL: http://$DOKPLOY_DOMAIN
 - LXC: $DOKPLOY_CTID $DOKPLOY_IP ($DOKPLOY_HOSTNAME)
 - NPM route: http://$DOKPLOY_IP:$DOKPLOY_PORT
+- Admin user: $(cat "$SECRETS_DIR/dokploy-admin-email" 2>/dev/null || true)
+- Admin password: $(cat "$SECRETS_DIR/dokploy-admin-password" 2>/dev/null || true)
+- API key: $(cat "$SECRETS_DIR/dokploy-api-key" 2>/dev/null || true)
+- NPM domain sync timer: sync-dokploy-npm-domains.timer in the Dokploy LXC
 
 Mail/email-service:
 - Repo: $EMAIL_SERVICE_REPO

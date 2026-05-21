@@ -14,9 +14,15 @@ The route is intended for internal/tailnet access, like `openadmin.<domain>`.
 Headscale DNS points `dokploy.<domain>` to the proxy tailnet IP and Nginx Proxy
 Manager forwards traffic to the Dokploy LXC.
 
-When `DOKPLOY_API_TOKEN` is set from a Dokploy dashboard API key, the installer
-also enables a periodic sync from Dokploy domains to Nginx Proxy Manager and
-Cloudflare:
+The installer can bootstrap Dokploy API access for the sync. If
+`DOKPLOY_API_TOKEN` is empty, it attempts the self-hosted first-run signup flow
+with `DOKPLOY_ADMIN_EMAIL` and `DOKPLOY_ADMIN_PASSWORD`, signs in with those
+credentials, creates an API key, and stores it under
+`/root/homelab/secrets/dokploy-api-key`. If an owner already exists, the same
+credentials must match that user so setup can sign in and create the API key.
+
+When an API key is available, the installer enables a periodic sync from Dokploy
+domains to Nginx Proxy Manager and Cloudflare:
 
 - Dokploy Application and Docker Compose domains are read through Dokploy's API.
 - NPM proxy hosts are marked with `# homelab-dokploy-managed`.

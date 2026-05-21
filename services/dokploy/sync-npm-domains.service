@@ -1,0 +1,9 @@
+[Unit]
+Description=Sync Dokploy domains to Nginx Proxy Manager and Cloudflare
+After=network-online.target docker.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+EnvironmentFile=/etc/homelab/dokploy-npm-sync.env
+ExecStart=/usr/local/bin/sync-dokploy-npm-domains

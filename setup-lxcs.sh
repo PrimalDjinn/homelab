@@ -103,6 +103,15 @@ DOKPLOY_CORES="${DOKPLOY_CORES:-auto}"
 DOKPLOY_DISK_GB="${DOKPLOY_DISK_GB:-80}"
 DOKPLOY_PORT="${DOKPLOY_PORT:-3000}"
 DOKPLOY_INSTALL_URL="${DOKPLOY_INSTALL_URL:-https://dokploy.com/install.sh}"
+DOKPLOY_API_TOKEN="${DOKPLOY_API_TOKEN:-}"
+DOKPLOY_NPM_SYNC_INTERVAL_SECONDS="${DOKPLOY_NPM_SYNC_INTERVAL_SECONDS:-60}"
+DOKPLOY_NPM_FORWARD_SCHEME="${DOKPLOY_NPM_FORWARD_SCHEME:-http}"
+DOKPLOY_NPM_FORWARD_PORT="${DOKPLOY_NPM_FORWARD_PORT:-80}"
+DOKPLOY_CLOUDFLARE_DNS_API_TOKEN="${DOKPLOY_CLOUDFLARE_DNS_API_TOKEN:-${CLOUDFLARE_DNS_API_TOKEN:-}}"
+DOKPLOY_CLOUDFLARE_DNS_TARGET="${DOKPLOY_CLOUDFLARE_DNS_TARGET:-}"
+DOKPLOY_CLOUDFLARE_DNS_ZONES="${DOKPLOY_CLOUDFLARE_DNS_ZONES:-}"
+DOKPLOY_CLOUDFLARE_DNS_PROXIED="${DOKPLOY_CLOUDFLARE_DNS_PROXIED:-false}"
+DOKPLOY_CLOUDFLARE_DNS_TTL="${DOKPLOY_CLOUDFLARE_DNS_TTL:-1}"
 OPENPANEL_PUBLIC_BACKEND_PORT="${OPENPANEL_PUBLIC_BACKEND_PORT:-80}"
 OPENPANEL_CLIENT_PANEL_PORT="${OPENPANEL_CLIENT_PANEL_PORT:-2083}"
 OPENPANEL_CLIENT_PANEL_SCHEME="${OPENPANEL_CLIENT_PANEL_SCHEME:-http}"
@@ -1290,13 +1299,66 @@ seed_npm_proxy_hosts() {
 
 install_dokploy_lxc() {
     local ctid="$1"
+    local sync_env
+    local sync_timer
+    local cloudflare_dns_target
 
     bootstrap_lxc "$ctid"
     install_docker "$ctid"
-    pct_exec "$ctid" "export DEBIAN_FRONTEND=noninteractive; apt-get install -y curl"
+    pct_exec "$ctid" "export DEBIAN_FRONTEND=noninteractive; apt-get install -y curl python3"
 
     info "Installing Dokploy in LXC $ctid"
     pct_exec "$ctid" "mkdir -p /etc/homelab && if [[ -f /etc/homelab/dokploy-installed ]] || docker ps -a --format '{{.Names}}' | grep -Eq '(^dokploy$|dokploy)'; then echo 'Dokploy already appears to be installed; skipping installer'; else export ADVERTISE_ADDR=$(quote "$DOKPLOY_IP"); curl -sSL $(quote "$DOKPLOY_INSTALL_URL") | sh && touch /etc/homelab/dokploy-installed; fi"
+
+    if [[ -z "$DOKPLOY_API_TOKEN" ]]; then
+        warn "Skipping Dokploy domain sync timer because DOKPLOY_API_TOKEN is not set. Create a Dokploy API key and rerun setup-lxcs.sh to enable it."
+    else
+        info "Installing Dokploy to NPM sync timer in LXC $ctid"
+        pct push "$ctid" "$SERVICES_DIR/dokploy/sync_npm_domains.py" /usr/local/bin/sync-dokploy-npm-domains
+        pct push "$ctid" "$SERVICES_DIR/dokploy/sync-npm-domains.service" /etc/systemd/system/sync-dokploy-npm-domains.service
+        pct_exec "$ctid" "chmod +x /usr/local/bin/sync-dokploy-npm-domains && mkdir -p /etc/homelab"
+
+        sync_timer="$(mktemp)"
+        cat > "$sync_timer" <<EOF
+[Unit]
+Description=Periodic Dokploy to Nginx Proxy Manager domain sync
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=${DOKPLOY_NPM_SYNC_INTERVAL_SECONDS}s
+AccuracySec=10s
+Unit=sync-dokploy-npm-domains.service
+
+[Install]
+WantedBy=timers.target
+EOF
+        pct push "$ctid" "$sync_timer" /etc/systemd/system/sync-dokploy-npm-domains.timer
+        rm -f "$sync_timer"
+
+        cloudflare_dns_target="${DOKPLOY_CLOUDFLARE_DNS_TARGET:-$(get_ip)}"
+        sync_env="$(mktemp)"
+        cat > "$sync_env" <<EOF
+DOKPLOY_URL=http://127.0.0.1:${DOKPLOY_PORT}
+DOKPLOY_API_TOKEN=$DOKPLOY_API_TOKEN
+DOKPLOY_DOMAIN=$DOKPLOY_DOMAIN
+DOKPLOY_IP=$DOKPLOY_IP
+DOKPLOY_NPM_FORWARD_SCHEME=$DOKPLOY_NPM_FORWARD_SCHEME
+DOKPLOY_NPM_FORWARD_PORT=$DOKPLOY_NPM_FORWARD_PORT
+NPM_URL=http://$PROXY_IP:81
+NPM_EMAIL=$NPM_LOGIN_EMAIL
+NPM_PASSWORD=$NPM_LOGIN_PASSWORD
+DOKPLOY_SYNC_HTTP_TIMEOUT=180
+DOKPLOY_CLOUDFLARE_DNS_API_TOKEN=$DOKPLOY_CLOUDFLARE_DNS_API_TOKEN
+DOKPLOY_CLOUDFLARE_DNS_TARGET=$cloudflare_dns_target
+DOKPLOY_CLOUDFLARE_DNS_ZONES=$DOKPLOY_CLOUDFLARE_DNS_ZONES
+DOKPLOY_CLOUDFLARE_DNS_PROXIED=$DOKPLOY_CLOUDFLARE_DNS_PROXIED
+DOKPLOY_CLOUDFLARE_DNS_TTL=$DOKPLOY_CLOUDFLARE_DNS_TTL
+EOF
+        chmod 600 "$sync_env"
+        pct push "$ctid" "$sync_env" /etc/homelab/dokploy-npm-sync.env
+        rm -f "$sync_env"
+        pct_exec "$ctid" "chmod 600 /etc/homelab/dokploy-npm-sync.env && systemctl daemon-reload && systemctl enable --now sync-dokploy-npm-domains.timer"
+    fi
 
     if [[ "$HOMELAB_NETWORK_DIAGNOSTICS" == "true" ]]; then
         diagnose_lxc_networking "$ctid"

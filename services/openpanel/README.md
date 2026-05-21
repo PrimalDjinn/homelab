@@ -18,19 +18,20 @@ Design:
 - Hosted client domains are exposed only through Nginx Proxy Manager.
 - Nginx Proxy Manager is the only public TLS/certificate layer.
 
-The domain sync keeps a CSV inventory at
-`/etc/homelab/openpanel-managed-resources.csv` for resources it controls. It:
+The domain sync marks resources it controls. Nginx Proxy Manager hosts are marked
+with `# homelab-openpanel-managed` in their advanced config, and Cloudflare DNS
+records are marked with the `homelab-openpanel-managed` record comment. It:
 
 - creates or adopts managed NPM proxy hosts for domains reported by `opencli`
 - creates or updates managed Cloudflare DNS records when enabled
 - removes stale managed NPM hosts and stale managed DNS records when the domain
   disappears from OpenPanel
 
-Only resources already marked and tracked as homelab-managed are eligible for
-auto-removal. Unrelated NPM hosts and unrelated Cloudflare DNS records are left
-untouched. The sync also requests and attaches per-domain NPM Let's Encrypt
-certificates by default. Disable that with `OPENPANEL_NPM_AUTO_CERTS=false` if
-you want to manage certificates manually.
+Only resources marked as homelab-managed are eligible for auto-removal.
+Unrelated NPM hosts and unrelated Cloudflare DNS records are left untouched. The
+sync also requests and attaches per-domain NPM Let's Encrypt certificates by
+default. Disable that with `OPENPANEL_NPM_AUTO_CERTS=false` if you want to manage
+certificates manually.
 
 When `OPENPANEL_CLOUDFLARE_DNS_API_TOKEN` (or the shared
 `CLOUDFLARE_DNS_API_TOKEN`) is set, the same sync also attempts to create or

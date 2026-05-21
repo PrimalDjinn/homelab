@@ -81,6 +81,11 @@ def remove_inventory_row(inventory: dict[tuple[str, str], dict[str, str]], kind:
     inventory.pop((kind, domain), None)
 
 
+def remove_inventory_kind(inventory: dict[tuple[str, str], dict[str, str]], kind: str) -> None:
+    for key in [key for key in inventory if key[0] == kind]:
+        inventory.pop(key, None)
+
+
 def dns_record_type(value: str) -> str:
     try:
         ip = ipaddress.ip_address(value)
@@ -227,7 +232,7 @@ def cloudflare_zone_for_domain(domain: str) -> dict | None:
     return next((zone for zone in zones if domain_matches_zone(domain, zone.get("name") or "")), None)
 
 
-def ensure_cloudflare_record(domain: str, inventory: dict[tuple[str, str], dict[str, str]]) -> None:
+def ensure_cloudflare_record(domain: str) -> None:
     target = env("OPENPANEL_CLOUDFLARE_DNS_TARGET")
     if not target:
         return
@@ -243,13 +248,11 @@ def ensure_cloudflare_record(domain: str, inventory: dict[tuple[str, str], dict[
     zone_id = zone["id"]
     query = urllib.parse.urlencode({"name": domain, "per_page": "1"})
     existing = cloudflare_api("GET", f"/zones/{zone_id}/dns_records?{query}").get("result") or []
-    inventory_row = inventory.get(("cloudflare_dns_record", domain))
     managed_record = next(
         (
             record
             for record in existing
             if record.get("comment") == DNS_MANAGED_COMMENT
-            or (inventory_row and str(record.get("id")) == inventory_row.get("resource_id"))
         ),
         None,
     )
@@ -271,10 +274,8 @@ def ensure_cloudflare_record(domain: str, inventory: dict[tuple[str, str], dict[
             and int(record.get("ttl", ttl)) == ttl
             and record.get("comment") == DNS_MANAGED_COMMENT
         ):
-            upsert_inventory_row(inventory, "cloudflare_dns_record", domain, record.get("id", ""), zone_id)
             return
         cloudflare_api("PUT", f"/zones/{zone_id}/dns_records/{record['id']}", payload)
-        upsert_inventory_row(inventory, "cloudflare_dns_record", domain, record.get("id", ""), zone_id)
         print(f"Updated Cloudflare {record_type} record for {domain} -> {target}")
         return
 
@@ -287,14 +288,12 @@ def ensure_cloudflare_record(domain: str, inventory: dict[tuple[str, str], dict[
             and int(record.get("ttl", ttl)) == ttl
         ):
             cloudflare_api("PUT", f"/zones/{zone_id}/dns_records/{record['id']}", payload)
-            upsert_inventory_row(inventory, "cloudflare_dns_record", domain, record.get("id", ""), zone_id)
             print(f"Adopted existing Cloudflare {record_type} record for {domain} -> {target}")
             return
         print(f"Cloudflare DNS record for {domain} exists but is not homelab-managed; leaving it untouched")
         return
 
-    created = cloudflare_api("POST", f"/zones/{zone_id}/dns_records", payload).get("result") or {}
-    upsert_inventory_row(inventory, "cloudflare_dns_record", domain, created.get("id", ""), zone_id)
+    cloudflare_api("POST", f"/zones/{zone_id}/dns_records", payload)
     print(f"Created Cloudflare {record_type} record for {domain} -> {target}")
 
 
@@ -431,7 +430,7 @@ def ensure_proxy_host(token: str, domain: str, inventory: dict[tuple[str, str], 
 def sync_public_domain(token: str, domain: str, inventory: dict[tuple[str, str], dict[str, str]]) -> None:
     host = ensure_proxy_host(token, domain, inventory)
     if env("OPENPANEL_CLOUDFLARE_DNS_API_TOKEN") or env("CLOUDFLARE_DNS_API_TOKEN"):
-        ensure_cloudflare_record(domain, inventory)
+        ensure_cloudflare_record(domain)
     if truthy(env("OPENPANEL_NPM_AUTO_CERTS", "true")):
         cert_id = ensure_certificate(token, domain)
         attach_certificate(token, host, cert_id)
@@ -451,26 +450,35 @@ def remove_stale_managed_proxy_hosts(token: str, desired_domains: set[str], inve
         print(f"Removed stale managed NPM proxy host for {primary_domain}")
 
 
-def remove_stale_managed_dns_records(desired_domains: set[str], inventory: dict[tuple[str, str], dict[str, str]]) -> None:
-    stale_domains = [domain for kind, domain in inventory if kind == "cloudflare_dns_record" and domain not in desired_domains]
-    for domain in stale_domains:
-        row = inventory.get(("cloudflare_dns_record", domain))
-        if not row or not row.get("zone_id") or not row.get("resource_id"):
-            remove_inventory_row(inventory, "cloudflare_dns_record", domain)
+def managed_cloudflare_records() -> list[tuple[str, dict]]:
+    records = []
+    for zone in cloudflare_controlled_zones():
+        zone_id = zone["id"]
+        page = 1
+        while True:
+            query = urllib.parse.urlencode({"per_page": "100", "page": str(page)})
+            response = cloudflare_api("GET", f"/zones/{zone_id}/dns_records?{query}")
+            records.extend(
+                (zone_id, record)
+                for record in response.get("result") or []
+                if record.get("comment") == DNS_MANAGED_COMMENT
+            )
+
+            result_info = response.get("result_info") or {}
+            total_pages = int(result_info.get("total_pages") or page)
+            if page >= total_pages:
+                break
+            page += 1
+    return records
+
+
+def remove_stale_managed_dns_records(desired_domains: set[str]) -> None:
+    for zone_id, record in managed_cloudflare_records():
+        domain = (record.get("name") or "").lower().rstrip(".")
+        if not domain or domain in desired_domains:
             continue
 
-        try:
-            record = cloudflare_api("GET", f"/zones/{row['zone_id']}/dns_records/{row['resource_id']}").get("result") or {}
-        except RuntimeError:
-            remove_inventory_row(inventory, "cloudflare_dns_record", domain)
-            continue
-
-        if record.get("comment") != DNS_MANAGED_COMMENT:
-            print(f"Cloudflare DNS record for {domain} is no longer marked as homelab-managed; leaving it untouched")
-            continue
-
-        cloudflare_api("DELETE", f"/zones/{row['zone_id']}/dns_records/{row['resource_id']}")
-        remove_inventory_row(inventory, "cloudflare_dns_record", domain)
+        cloudflare_api("DELETE", f"/zones/{zone_id}/dns_records/{record['id']}")
         print(f"Removed stale managed Cloudflare DNS record for {domain}")
 
 
@@ -496,7 +504,9 @@ def main() -> int:
         sync_public_domain(token, domain, inventory)
 
     remove_stale_managed_proxy_hosts(token, desired_proxy_domains, inventory)
-    remove_stale_managed_dns_records(desired_domains, inventory)
+    if env("OPENPANEL_CLOUDFLARE_DNS_API_TOKEN") or env("CLOUDFLARE_DNS_API_TOKEN"):
+        remove_stale_managed_dns_records(desired_domains)
+    remove_inventory_kind(inventory, "cloudflare_dns_record")
     save_inventory(inventory)
 
     if truthy(env("OPENPANEL_NPM_AUTO_CERTS", "true")):

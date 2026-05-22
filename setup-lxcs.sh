@@ -70,7 +70,19 @@ AUTODISCOVER_DOMAIN="${AUTODISCOVER_DOMAIN:-autodiscover.$DOMAIN}"
 AUTOCONFIG_DOMAIN="${AUTOCONFIG_DOMAIN:-autoconfig.$DOMAIN}"
 MTA_STS_DOMAIN="${MTA_STS_DOMAIN:-mta-sts.$DOMAIN}"
 LE_EMAIL="${LE_EMAIL:-admin@$DOMAIN}"
-AUTH_ADMIN_USER="${AUTH_ADMIN_USER:-admin}"
+AUTH_PORT="${AUTH_PORT:-9000}"
+AUTHENTIK_BOOTSTRAP_EMAIL="${AUTHENTIK_BOOTSTRAP_EMAIL:-admin@$DOMAIN}"
+AUTHENTIK_BOOTSTRAP_PASSWORD="${AUTHENTIK_BOOTSTRAP_PASSWORD:-}"
+AUTHENTIK_BOOTSTRAP_TOKEN="${AUTHENTIK_BOOTSTRAP_TOKEN:-}"
+AUTHENTIK_IMAGE="${AUTHENTIK_IMAGE:-ghcr.io/goauthentik/server}"
+AUTHENTIK_TAG="${AUTHENTIK_TAG:-2026.2.3}"
+AUTHENTIK_POSTGRES_USER="${AUTHENTIK_POSTGRES_USER:-authentik}"
+AUTHENTIK_POSTGRES_DB="${AUTHENTIK_POSTGRES_DB:-authentik}"
+AUTHENTIK_EMAIL__HOST="${AUTHENTIK_EMAIL__HOST:-}"
+AUTHENTIK_EMAIL__PORT="${AUTHENTIK_EMAIL__PORT:-587}"
+AUTHENTIK_EMAIL__USERNAME="${AUTHENTIK_EMAIL__USERNAME:-}"
+AUTHENTIK_EMAIL__PASSWORD="${AUTHENTIK_EMAIL__PASSWORD:-}"
+AUTHENTIK_EMAIL__FROM="${AUTHENTIK_EMAIL__FROM:-Authentik <noreply@$DOMAIN>}"
 NPM_ADMIN_EMAIL="${NPM_ADMIN_EMAIL:-$LE_EMAIL}"
 NPM_PASSWORD="${NPM_PASSWORD:-${NPM_DEFAULT_PASSWORD:-}}"
 NPM_DNS_CHALLENGE_PROVIDER="${NPM_DNS_CHALLENGE_PROVIDER:-cloudflare}"
@@ -1291,7 +1303,7 @@ seed_npm_proxy_hosts() {
         return
     fi
 
-    export AUTH_DOMAIN AUTH_IP HEADSCALE_DOMAIN HEADSCALE_IP HEADPLANE_DOMAIN OPENPANEL_CLIENT_PANEL_DOMAIN OPENPANEL_IP OPENPANEL_CLIENT_PANEL_PORT OPENPANEL_CLIENT_PANEL_SCHEME
+    export AUTH_DOMAIN AUTH_IP AUTH_PORT HEADSCALE_DOMAIN HEADSCALE_IP HEADPLANE_DOMAIN OPENPANEL_CLIENT_PANEL_DOMAIN OPENPANEL_IP OPENPANEL_CLIENT_PANEL_PORT OPENPANEL_CLIENT_PANEL_SCHEME
     export DOKPLOY_DOMAIN DOKPLOY_IP DOKPLOY_PORT
     export MAIL_DOMAIN EMAIL_APP_DOMAIN WEBMAIL_DOMAIN LISTMONK_DOMAIN POSTAL_DOMAIN LIBREDESK_DOMAIN MAIL_IP AUTODISCOVER_DOMAIN AUTOCONFIG_DOMAIN MTA_STS_DOMAIN
     python3 "$SERVICES_DIR/proxy/render-npm-hosts.py" --output-dir "$GENERATED_DIR/npm"
@@ -1405,45 +1417,32 @@ configure_npm_lets_encrypt() {
 
 install_auth_lxc() {
     local ctid="$1"
-    local admin_password oidc_secret jwt_secret session_secret storage_key hmac_secret
-    local headscale_client_hash admin_hash jwks_file jwks_indented
+    local bootstrap_password bootstrap_token postgres_password secret_key
 
     bootstrap_lxc "$ctid"
     install_docker "$ctid"
 
-    admin_password="$(secret_file "$SECRETS_DIR/authelia-admin-password" 24)"
-    oidc_secret="$(secret_file "$SECRETS_DIR/oidc-headscale-client-secret" 48)"
-    jwt_secret="$(secret_file "$SECRETS_DIR/authelia-jwt-secret" 64)"
-    session_secret="$(secret_file "$SECRETS_DIR/authelia-session-secret" 64)"
-    storage_key="$(secret_file "$SECRETS_DIR/authelia-storage-key" 64)"
-    hmac_secret="$(secret_file "$SECRETS_DIR/authelia-oidc-hmac-secret" 64)"
-    jwks_file="$SECRETS_DIR/authelia-oidc-private-key.pem"
+    bootstrap_password="${AUTHENTIK_BOOTSTRAP_PASSWORD:-$(strong_secret_file "$SECRETS_DIR/authentik-bootstrap-password" 24)}"
+    bootstrap_token="${AUTHENTIK_BOOTSTRAP_TOKEN:-$(secret_file "$SECRETS_DIR/authentik-bootstrap-token" 48)}"
+    postgres_password="${AUTHENTIK_POSTGRES_PASSWORD:-$(secret_file "$SECRETS_DIR/authentik-postgres-password" 32)}"
+    secret_key="${AUTHENTIK_SECRET_KEY:-$(secret_file "$SECRETS_DIR/authentik-secret-key" 64)}"
+    printf '%s\n' "$AUTHENTIK_BOOTSTRAP_EMAIL" > "$SECRETS_DIR/authentik-bootstrap-email"
+    printf '%s\n' "$bootstrap_password" > "$SECRETS_DIR/authentik-bootstrap-password"
+    printf '%s\n' "$bootstrap_token" > "$SECRETS_DIR/authentik-bootstrap-token"
+    chmod 600 "$SECRETS_DIR/authentik-bootstrap-email" "$SECRETS_DIR/authentik-bootstrap-password" "$SECRETS_DIR/authentik-bootstrap-token"
 
-    if [[ ! -s "$jwks_file" ]]; then
-        openssl genrsa -out "$jwks_file" 2048
-        chmod 600 "$jwks_file"
-    fi
-    jwks_indented="$(sed 's/^/          /' "$jwks_file")"
+    export AUTHENTIK_IMAGE AUTHENTIK_TAG AUTHENTIK_BOOTSTRAP_EMAIL
+    export AUTHENTIK_BOOTSTRAP_PASSWORD="$bootstrap_password"
+    export AUTHENTIK_BOOTSTRAP_TOKEN="$bootstrap_token"
+    export AUTHENTIK_POSTGRES_USER AUTHENTIK_POSTGRES_DB
+    export AUTHENTIK_POSTGRES_PASSWORD="$postgres_password"
+    export AUTHENTIK_SECRET_KEY="$secret_key"
+    export AUTHENTIK_EMAIL__HOST AUTHENTIK_EMAIL__PORT AUTHENTIK_EMAIL__USERNAME AUTHENTIK_EMAIL__PASSWORD AUTHENTIK_EMAIL__FROM
 
-    info "Generating Authelia password and OIDC client hashes"
-    admin_hash="$(pct_exec "$ctid" "docker run --rm authelia/authelia:latest authelia crypto hash generate argon2 --password $(quote "$admin_password") | awk -F'Digest: ' '/Digest/ { print \$2 }'")"
-    headscale_client_hash="$(pct_exec "$ctid" "docker run --rm authelia/authelia:latest authelia crypto hash generate pbkdf2 --password $(quote "$oidc_secret") | awk -F'Digest: ' '/Digest/ { print \$2 }'")"
+    python3 "$SERVICES_DIR/auth/render.py" --output-dir "$GENERATED_DIR/authentik"
 
-    export AUTHELIA_VERSION="${AUTHELIA_VERSION:-latest}"
-    export DOMAIN AUTH_DOMAIN HEADSCALE_DOMAIN HEADPLANE_DOMAIN AUTH_ADMIN_USER
-    export AUTHELIA_JWT_SECRET="$jwt_secret"
-    export AUTHELIA_SESSION_SECRET="$session_secret"
-    export AUTHELIA_STORAGE_KEY="$storage_key"
-    export AUTHELIA_OIDC_HMAC_SECRET="$hmac_secret"
-    export AUTHELIA_OIDC_PRIVATE_KEY_INDENTED="$jwks_indented"
-    export HEADSCALE_OIDC_CLIENT_SECRET_HASH="$headscale_client_hash"
-    export AUTH_ADMIN_PASSWORD_HASH="$admin_hash"
-    export AUTH_ADMIN_EMAIL="$LE_EMAIL"
-
-    python3 "$SERVICES_DIR/auth/render.py" --output-dir "$GENERATED_DIR/authelia"
-
-    copy_dir_to_lxc "$ctid" "$GENERATED_DIR/authelia" /opt/authelia
-    pct_exec "$ctid" "chmod +x /opt/authelia/start.sh && chmod 600 /opt/authelia/config/*.yml && /opt/authelia/start.sh"
+    copy_dir_to_lxc "$ctid" "$GENERATED_DIR/authentik" /opt/authentik
+    pct_exec "$ctid" "chmod +x /opt/authentik/start.sh && chmod 600 /opt/authentik/.env && /opt/authentik/start.sh"
 
     if [[ "$HOMELAB_NETWORK_DIAGNOSTICS" == "true" ]]; then
         diagnose_lxc_networking "$ctid"
@@ -1556,6 +1555,7 @@ render_headscale_stack() {
     export SERVER_URL="$HEADSCALE_PUBLIC_URL"
     export DNS_BASE_DOMAIN="tailnet.$DOMAIN"
     export HEADSCALE_OIDC_CLIENT_SECRET
+    export HEADSCALE_OIDC_ISSUER="${HEADSCALE_OIDC_ISSUER:-https://$AUTH_DOMAIN/application/o/headscale/}"
     export HEADPLANE_SERVER__COOKIE_SECRET
     export HEADPLANE_SERVER__INFO_SECRET
     export HEADSCALE_API_KEY="$api_key"
@@ -1581,6 +1581,7 @@ install_headscale_lxc() {
     fi
 
     export HEADSCALE_OIDC_CLIENT_SECRET="$oidc_secret"
+    export HEADSCALE_OIDC_ISSUER="${HEADSCALE_OIDC_ISSUER:-https://$AUTH_DOMAIN/application/o/headscale/}"
     export HEADPLANE_SERVER__COOKIE_SECRET="$cookie_secret"
     export HEADPLANE_SERVER__INFO_SECRET="$info_secret"
 
@@ -1708,7 +1709,7 @@ Base domain: $DOMAIN
 
 LXC layout:
 - Nginx Proxy Manager: $PROXY_CTID $PROXY_IP ($PROXY_HOSTNAME)
-- Authelia auth/OIDC: $AUTH_CTID $AUTH_IP ($AUTH_HOSTNAME)
+- Authentik auth/OIDC: $AUTH_CTID $AUTH_IP ($AUTH_HOSTNAME)
 - Headscale + Headplane: $HEADSCALE_CTID $HEADSCALE_IP ($HEADSCALE_HOSTNAME)
 - Mail/email-service: $MAIL_CTID $MAIL_IP ($MAIL_HOSTNAME)
 - OpenPanel VM: $OPENPANEL_VMID $OPENPANEL_IP ($OPENPANEL_HOSTNAME)
@@ -1734,7 +1735,7 @@ Nginx Proxy Manager:
 - Internal admin URL: http://$PROXY_IP:81
 - Admin login verified by automation: $NPM_LOGIN_EMAIL / $NPM_LOGIN_PASSWORD
 - Add proxy hosts:
-  - $AUTH_DOMAIN -> http://$AUTH_IP:9091
+  - $AUTH_DOMAIN -> http://$AUTH_IP:$AUTH_PORT
   - $HEADSCALE_DOMAIN -> http://$HEADSCALE_IP:8080
   - $HEADPLANE_DOMAIN -> http://$HEADSCALE_IP:3000
   - $OPENPANEL_CLIENT_PANEL_DOMAIN -> $OPENPANEL_CLIENT_PANEL_SCHEME://$OPENPANEL_IP:$OPENPANEL_CLIENT_PANEL_PORT
@@ -1747,10 +1748,13 @@ Nginx Proxy Manager:
   - $LIBREDESK_DOMAIN -> http://$MAIL_IP:9001
 - Request Let's Encrypt certificates for those hosts using $LE_EMAIL.
 
-Authelia:
+Authentik:
 - URL: https://$AUTH_DOMAIN
-- Initial user: $AUTH_ADMIN_USER
-- Initial password: $(cat "$SECRETS_DIR/authelia-admin-password")
+- Initial user: $(cat "$SECRETS_DIR/authentik-bootstrap-email" 2>/dev/null || true)
+- Initial password: $(cat "$SECRETS_DIR/authentik-bootstrap-password" 2>/dev/null || true)
+- Bootstrap token: $(cat "$SECRETS_DIR/authentik-bootstrap-token" 2>/dev/null || true)
+- Headscale OIDC issuer: ${HEADSCALE_OIDC_ISSUER:-https://$AUTH_DOMAIN/application/o/headscale/}
+- Configure an Authentik OAuth2/OpenID provider with slug/client ID "headscale" and the shared client secret in $SECRETS_DIR/oidc-headscale-client-secret.
 
 Headscale:
 - URL: $HEADSCALE_PUBLIC_URL

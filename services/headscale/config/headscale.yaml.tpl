@@ -50,7 +50,7 @@ unix_socket_permission: "0770"
 
 oidc:
   only_start_if_oidc_is_available: false
-  issuer: "https://${AUTH_DOMAIN}"
+  issuer: "${HEADSCALE_OIDC_ISSUER}"
   client_id: "headscale"
   client_secret: "${HEADSCALE_OIDC_CLIENT_SECRET}"
   expiry: 180d

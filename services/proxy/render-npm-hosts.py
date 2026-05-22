@@ -49,7 +49,7 @@ def main() -> None:
     dest.mkdir(parents=True)
 
     hosts = {
-        "auth": proxy_payload(env("AUTH_DOMAIN"), env("AUTH_IP"), 9091),
+        "auth": proxy_payload(env("AUTH_DOMAIN"), env("AUTH_IP"), int(env("AUTH_PORT") or 9000)),
         "headscale": proxy_payload(env("HEADSCALE_DOMAIN"), env("HEADSCALE_IP"), 8080),
         "headplane": proxy_payload(env("HEADPLANE_DOMAIN"), env("HEADSCALE_IP"), 3000),
         "openpanel": proxy_payload(

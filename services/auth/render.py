@@ -31,8 +31,6 @@ def main() -> None:
         copy_file(src / name, dest / name)
 
     render_template(src / ".env.example", dest / ".env")
-    render_template(src / "config" / "configuration.yml.tpl", dest / "config" / "configuration.yml")
-    render_template(src / "config" / "users_database.yml.tpl", dest / "config" / "users_database.yml")
 
 
 if __name__ == "__main__":

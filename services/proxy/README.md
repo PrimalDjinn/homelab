@@ -10,7 +10,7 @@ Initial UI:
 
 Recommended proxy hosts:
 
-- `auth.<domain>` -> `http://<auth-lxc-ip>:9091`
+- `auth.<domain>` -> `http://<auth-lxc-ip>:9000`
 - `headscale.<domain>` -> `http://<headscale-lxc-ip>:8080`
 - `headplane.<domain>` -> `http://<headscale-lxc-ip>:3000`
 

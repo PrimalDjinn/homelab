@@ -31,7 +31,7 @@ integration:
 
 oidc:
   enabled: true
-  issuer: "https://${AUTH_DOMAIN}"
+  issuer: "${HEADSCALE_OIDC_ISSUER}"
   headscale_api_key: "${HEADSCALE_API_KEY}"
   client_id: "headscale"
   client_secret: "${HEADSCALE_OIDC_CLIENT_SECRET}"

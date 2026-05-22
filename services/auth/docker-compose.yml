@@ -1,8 +1,109 @@
+version: "3.8"
+
 services:
-  authelia:
-    image: authelia/authelia:${AUTHELIA_VERSION:-latest}
+  postgresql:
+    image: docker.io/library/postgres:16-alpine
     restart: unless-stopped
-    ports:
-      - "9091:9091"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -d $${POSTGRES_DB} -U $${POSTGRES_USER}"]
+      start_period: 20s
+      interval: 30s
+      retries: 5
+      timeout: 5s
     volumes:
-      - ./config:/config
+      - database:/var/lib/postgresql/data
+    environment:
+      POSTGRES_PASSWORD: ${PG_PASS:?PG_PASS is required}
+      POSTGRES_USER: ${PG_USER:?PG_USER is required}
+      POSTGRES_DB: ${PG_DB:?PG_DB is required}
+    expose:
+      - 5432
+
+  redis:
+    image: docker.io/library/redis:alpine
+    command: --save 60 1 --loglevel warning
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli ping | grep PONG"]
+      start_period: 20s
+      interval: 30s
+      retries: 5
+      timeout: 3s
+    volumes:
+      - redis:/data
+    expose:
+      - 6379
+
+  server:
+    image: ${AUTHENTIK_IMAGE:-ghcr.io/goauthentik/server}:${AUTHENTIK_TAG:-2026.2.3}
+    restart: unless-stopped
+    command: server
+    environment:
+      AUTHENTIK_SECRET_KEY: ${AUTHENTIK_SECRET_KEY:?AUTHENTIK_SECRET_KEY is required}
+      AUTHENTIK_REDIS__HOST: redis
+      AUTHENTIK_POSTGRESQL__HOST: postgresql
+      AUTHENTIK_POSTGRESQL__USER: ${PG_USER:?PG_USER is required}
+      AUTHENTIK_POSTGRESQL__NAME: ${PG_DB:?PG_DB is required}
+      AUTHENTIK_POSTGRESQL__PASSWORD: ${PG_PASS:?PG_PASS is required}
+      AUTHENTIK_BOOTSTRAP_EMAIL: ${AUTHENTIK_BOOTSTRAP_EMAIL:-}
+      AUTHENTIK_BOOTSTRAP_PASSWORD: ${AUTHENTIK_BOOTSTRAP_PASSWORD:-}
+      AUTHENTIK_BOOTSTRAP_TOKEN: ${AUTHENTIK_BOOTSTRAP_TOKEN:-}
+      AUTHENTIK_EMAIL__HOST: ${AUTHENTIK_EMAIL__HOST:-}
+      AUTHENTIK_EMAIL__PORT: ${AUTHENTIK_EMAIL__PORT:-587}
+      AUTHENTIK_EMAIL__USERNAME: ${AUTHENTIK_EMAIL__USERNAME:-}
+      AUTHENTIK_EMAIL__PASSWORD: ${AUTHENTIK_EMAIL__PASSWORD:-}
+      AUTHENTIK_EMAIL__FROM: ${AUTHENTIK_EMAIL__FROM:-}
+    volumes:
+      - media:/media
+      - custom-templates:/templates
+    ports:
+      - "9000:9000"
+      - "9443:9443"
+    depends_on:
+      postgresql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  worker:
+    image: ${AUTHENTIK_IMAGE:-ghcr.io/goauthentik/server}:${AUTHENTIK_TAG:-2026.2.3}
+    restart: unless-stopped
+    command: worker
+    environment:
+      AUTHENTIK_SECRET_KEY: ${AUTHENTIK_SECRET_KEY:?AUTHENTIK_SECRET_KEY is required}
+      AUTHENTIK_REDIS__HOST: redis
+      AUTHENTIK_POSTGRESQL__HOST: postgresql
+      AUTHENTIK_POSTGRESQL__USER: ${PG_USER:?PG_USER is required}
+      AUTHENTIK_POSTGRESQL__NAME: ${PG_DB:?PG_DB is required}
+      AUTHENTIK_POSTGRESQL__PASSWORD: ${PG_PASS:?PG_PASS is required}
+      AUTHENTIK_BOOTSTRAP_EMAIL: ${AUTHENTIK_BOOTSTRAP_EMAIL:-}
+      AUTHENTIK_BOOTSTRAP_PASSWORD: ${AUTHENTIK_BOOTSTRAP_PASSWORD:-}
+      AUTHENTIK_BOOTSTRAP_TOKEN: ${AUTHENTIK_BOOTSTRAP_TOKEN:-}
+      AUTHENTIK_EMAIL__HOST: ${AUTHENTIK_EMAIL__HOST:-}
+      AUTHENTIK_EMAIL__PORT: ${AUTHENTIK_EMAIL__PORT:-587}
+      AUTHENTIK_EMAIL__USERNAME: ${AUTHENTIK_EMAIL__USERNAME:-}
+      AUTHENTIK_EMAIL__PASSWORD: ${AUTHENTIK_EMAIL__PASSWORD:-}
+      AUTHENTIK_EMAIL__FROM: ${AUTHENTIK_EMAIL__FROM:-}
+    user: root
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - media:/media
+      - certs:/certs
+      - custom-templates:/templates
+    depends_on:
+      postgresql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+volumes:
+  database:
+    driver: local
+  redis:
+    driver: local
+  media:
+    driver: local
+  certs:
+    driver: local
+  custom-templates:
+    driver: local

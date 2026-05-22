@@ -13,6 +13,9 @@ const files = [
   },
 ];
 
+/**
+ * @param {string} value
+ */
 function render(value) {
   return value.replace(/\$\{([A-Z0-9_]+)\}/g, (_, key) => process.env[key] ?? "");
 }

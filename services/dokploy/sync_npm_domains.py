@@ -77,12 +77,7 @@ def npm_api(method: str, path: str, token: str = "", payload: dict | None = None
 
 
 def cloudflare_api(method: str, path: str, payload: dict | None = None):
-    token = (
-        env("DOKPLOY_CLOUDFLARE_DNS_API_TOKEN")
-        or env("CLOUDFLARE_DNS_API_TOKEN")
-        or env("NPM_CLOUDFLARE_DNS_API_TOKEN")
-        or env("STALWART_ACME_DNS_CF_SECRET")
-    )
+    token = cloudflare_token()
     if not token:
         raise RuntimeError("Cloudflare DNS token is not configured")
     parsed = request_json(
@@ -94,6 +89,15 @@ def cloudflare_api(method: str, path: str, payload: dict | None = None):
     if not parsed.get("success", False):
         raise RuntimeError(f"Cloudflare API {method} {path} failed: {json.dumps(parsed)}")
     return parsed
+
+
+def cloudflare_token() -> str:
+    return (
+        env("DOKPLOY_CLOUDFLARE_DNS_API_TOKEN")
+        or env("CLOUDFLARE_DNS_API_TOKEN")
+        or env("NPM_CLOUDFLARE_DNS_API_TOKEN")
+        or env("STALWART_ACME_DNS_CF_SECRET")
+    )
 
 
 def items_from_response(value) -> list[dict]:
@@ -203,6 +207,27 @@ def build_update_payload(existing: dict, desired: dict) -> dict:
     }
 
 
+def proxy_host_update_payload(host: dict, certificate_id: int = 0, ssl_forced: bool | None = None) -> dict:
+    return {
+        "domain_names": host.get("domain_names") or [],
+        "forward_scheme": host.get("forward_scheme") or env("DOKPLOY_NPM_FORWARD_SCHEME", "http"),
+        "forward_host": host.get("forward_host") or env("DOKPLOY_IP"),
+        "forward_port": host.get("forward_port") or int(env("DOKPLOY_NPM_FORWARD_PORT", "80")),
+        "access_list_id": host.get("access_list_id") or 0,
+        "certificate_id": certificate_id or host.get("certificate_id") or 0,
+        "ssl_forced": bool(host.get("ssl_forced") if ssl_forced is None else ssl_forced),
+        "caching_enabled": bool(host.get("caching_enabled", False)),
+        "block_exploits": bool(host.get("block_exploits", True)),
+        "allow_websocket_upgrade": bool(host.get("allow_websocket_upgrade", True)),
+        "http2_support": True,
+        "hsts_enabled": bool(host.get("hsts_enabled", False)),
+        "hsts_subdomains": bool(host.get("hsts_subdomains", False)),
+        "meta": host.get("meta") or {},
+        "advanced_config": host.get("advanced_config") or "",
+        "locations": host.get("locations") or [],
+    }
+
+
 def ensure_npm_hosts(token: str, desired_domains: set[str]) -> None:
     hosts = npm_api("GET", "/api/nginx/proxy-hosts", token) or []
     for domain in sorted(desired_domains):
@@ -228,6 +253,74 @@ def ensure_npm_hosts(token: str, desired_domains: set[str]) -> None:
             continue
         npm_api("DELETE", f"/api/nginx/proxy-hosts/{host['id']}", token)
         print(f"Removed stale managed NPM proxy host for {primary_domain}")
+
+
+def certificate_payload(domain: str) -> dict:
+    token = cloudflare_token()
+    if not token:
+        raise RuntimeError("Cloudflare DNS token is required for Dokploy NPM auto certificates")
+
+    return {
+        "provider": "letsencrypt",
+        "nice_name": f"dokploy {domain}",
+        "domain_names": [domain],
+        "meta": {
+            "dns_challenge": True,
+            "dns_provider": "cloudflare",
+            "dns_provider_credentials": f"# Cloudflare API token\ndns_cloudflare_api_token = {token}",
+            "propagation_seconds": int(env("NPM_DNS_PROPAGATION_SECONDS", "60")),
+        },
+    }
+
+
+def ensure_certificate(token: str, domain: str) -> int:
+    certificates = npm_api("GET", "/api/nginx/certificates", token) or []
+    existing = next(
+        (
+            certificate
+            for certificate in certificates
+            if certificate.get("provider") == "letsencrypt" and domain in (certificate.get("domain_names") or [])
+        ),
+        None,
+    )
+    if existing:
+        return int(existing["id"])
+
+    created = npm_api("POST", "/api/nginx/certificates", token, certificate_payload(domain)) or {}
+    cert_id = created.get("id")
+    if not cert_id:
+        raise RuntimeError(f"NPM certificate creation returned no certificate id for {domain}")
+    print(f"Created NPM Let's Encrypt certificate for {domain}")
+    return int(cert_id)
+
+
+def attach_certificate(token: str, host: dict, cert_id: int) -> None:
+    nginx_online = (host.get("meta") or {}).get("nginx_online")
+    if int(host.get("certificate_id") or 0) == cert_id and bool(host.get("ssl_forced", False)) and nginx_online is not False:
+        return
+
+    payload = proxy_host_update_payload(host, cert_id, True)
+    npm_api("PUT", f"/api/nginx/proxy-hosts/{host['id']}", token, payload)
+    print(f"Attached NPM certificate {cert_id} to {', '.join(payload['domain_names'])}")
+
+
+def ensure_npm_certificates(token: str, desired_domains: set[str]) -> None:
+    if not truthy(env("DOKPLOY_NPM_AUTO_CERTS", "true")):
+        return
+    if not cloudflare_token():
+        print("Dokploy NPM auto certificates are enabled but no Cloudflare DNS token is set; skipping certificates")
+        return
+
+    hosts = npm_api("GET", "/api/nginx/proxy-hosts", token) or []
+    for domain in sorted(desired_domains):
+        if not cloudflare_zone_for_domain(domain):
+            print(f"No controlled Cloudflare zone found for {domain}; skipping NPM certificate")
+            continue
+        host = next((item for item in hosts if domain in (item.get("domain_names") or [])), None)
+        if not host:
+            continue
+        cert_id = ensure_certificate(token, domain)
+        attach_certificate(token, host, cert_id)
 
 
 def domain_matches_zone(domain: str, zone_name: str) -> bool:
@@ -284,14 +377,29 @@ def ensure_cloudflare_record(domain: str) -> None:
     payload = {"type": record_type, "name": domain, "content": target, "ttl": ttl, "proxied": proxied, "comment": DNS_MANAGED_COMMENT}
 
     if managed_record:
-        cloudflare_api("PUT", f"/zones/{zone_id}/dns_records/{managed_record['id']}", payload)
+        record = managed_record
+        if (
+            record.get("type") == record_type
+            and record.get("content") == target
+            and bool(record.get("proxied", False)) == proxied
+            and int(record.get("ttl", ttl)) == ttl
+            and record.get("comment") == DNS_MANAGED_COMMENT
+        ):
+            return
+        cloudflare_api("PUT", f"/zones/{zone_id}/dns_records/{record['id']}", payload)
         print(f"Updated Cloudflare {record_type} record for {domain} -> {target}")
         return
     if existing:
         record = existing[0]
-        if record.get("type") == record_type and record.get("content") == target and bool(record.get("proxied", False)) == proxied:
+        if (
+            record.get("type") == record_type
+            and record.get("content") == target
+            and bool(record.get("proxied", False)) == proxied
+            and int(record.get("ttl", ttl)) == ttl
+        ):
             cloudflare_api("PUT", f"/zones/{zone_id}/dns_records/{record['id']}", payload)
             print(f"Adopted existing Cloudflare {record_type} record for {domain} -> {target}")
+            return
         else:
             print(f"Cloudflare DNS record for {domain} exists but is not homelab-managed; leaving it untouched")
         return
@@ -336,15 +444,11 @@ def main() -> int:
     desired_domains = dokploy_domains()
     token = npm_token()
     ensure_npm_hosts(token, desired_domains)
-    if (
-        env("DOKPLOY_CLOUDFLARE_DNS_API_TOKEN")
-        or env("CLOUDFLARE_DNS_API_TOKEN")
-        or env("NPM_CLOUDFLARE_DNS_API_TOKEN")
-        or env("STALWART_ACME_DNS_CF_SECRET")
-    ):
+    if cloudflare_token():
         sync_cloudflare(desired_domains)
     elif env("DOKPLOY_CLOUDFLARE_DNS_TARGET"):
         print("Cloudflare DNS target is configured but no DNS token is set; skipping DNS")
+    ensure_npm_certificates(token, desired_domains)
     return 0
 
 

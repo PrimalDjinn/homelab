@@ -26,6 +26,8 @@ domains to Nginx Proxy Manager and Cloudflare:
 
 - Dokploy Application and Docker Compose domains are read through Dokploy's API.
 - NPM proxy hosts are marked with `# homelab-dokploy-managed`.
+- NPM Let's Encrypt certificates are created and attached by default when
+  `DOKPLOY_NPM_AUTO_CERTS=true` and the domain is in a controlled Cloudflare zone.
 - Cloudflare DNS records are marked with the `homelab-dokploy-managed` record comment.
 - Stale NPM hosts and Cloudflare records are removed only when they carry those managed markers.
 

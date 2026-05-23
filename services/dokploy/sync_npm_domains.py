@@ -77,7 +77,12 @@ def npm_api(method: str, path: str, token: str = "", payload: dict | None = None
 
 
 def cloudflare_api(method: str, path: str, payload: dict | None = None):
-    token = env("DOKPLOY_CLOUDFLARE_DNS_API_TOKEN") or env("CLOUDFLARE_DNS_API_TOKEN")
+    token = (
+        env("DOKPLOY_CLOUDFLARE_DNS_API_TOKEN")
+        or env("CLOUDFLARE_DNS_API_TOKEN")
+        or env("NPM_CLOUDFLARE_DNS_API_TOKEN")
+        or env("STALWART_ACME_DNS_CF_SECRET")
+    )
     if not token:
         raise RuntimeError("Cloudflare DNS token is not configured")
     parsed = request_json(
@@ -331,8 +336,15 @@ def main() -> int:
     desired_domains = dokploy_domains()
     token = npm_token()
     ensure_npm_hosts(token, desired_domains)
-    if env("DOKPLOY_CLOUDFLARE_DNS_API_TOKEN") or env("CLOUDFLARE_DNS_API_TOKEN"):
+    if (
+        env("DOKPLOY_CLOUDFLARE_DNS_API_TOKEN")
+        or env("CLOUDFLARE_DNS_API_TOKEN")
+        or env("NPM_CLOUDFLARE_DNS_API_TOKEN")
+        or env("STALWART_ACME_DNS_CF_SECRET")
+    ):
         sync_cloudflare(desired_domains)
+    elif env("DOKPLOY_CLOUDFLARE_DNS_TARGET"):
+        print("Cloudflare DNS target is configured but no DNS token is set; skipping DNS")
     return 0
 
 

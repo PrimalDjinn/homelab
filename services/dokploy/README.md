@@ -29,6 +29,10 @@ domains to Nginx Proxy Manager and Cloudflare:
 - Cloudflare DNS records are marked with the `homelab-dokploy-managed` record comment.
 - Stale NPM hosts and Cloudflare records are removed only when they carry those managed markers.
 
+Cloudflare sync requires `DOKPLOY_CLOUDFLARE_DNS_API_TOKEN` or a shared fallback
+token. If the Dokploy-specific token is empty, setup uses `CLOUDFLARE_DNS_API_TOKEN`,
+then `NPM_CLOUDFLARE_DNS_API_TOKEN`, then `STALWART_ACME_DNS_CF_SECRET`.
+
 By default, synced NPM hosts forward to Dokploy's internal Traefik at
 `http://<dokploy-ip>:80`. Override with `DOKPLOY_NPM_FORWARD_SCHEME` and
 `DOKPLOY_NPM_FORWARD_PORT` if your Dokploy domain setup requires a different

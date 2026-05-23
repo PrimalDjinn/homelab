@@ -163,7 +163,12 @@ def api(method: str, path: str, token: str = "", payload: dict | None = None):
 
 
 def cloudflare_api(method: str, path: str, payload: dict | None = None):
-    token = env("OPENPANEL_CLOUDFLARE_DNS_API_TOKEN") or env("CLOUDFLARE_DNS_API_TOKEN")
+    token = (
+        env("OPENPANEL_CLOUDFLARE_DNS_API_TOKEN")
+        or env("CLOUDFLARE_DNS_API_TOKEN")
+        or env("NPM_CLOUDFLARE_DNS_API_TOKEN")
+        or env("STALWART_ACME_DNS_CF_SECRET")
+    )
     if not token:
         raise RuntimeError("Cloudflare DNS token is not configured")
 
@@ -351,7 +356,12 @@ def proxy_host_update_payload(host: dict, certificate_id: int = 0, ssl_forced: b
 
 
 def certificate_payload(domain: str) -> dict:
-    token = env("OPENPANEL_CLOUDFLARE_DNS_API_TOKEN") or env("CLOUDFLARE_DNS_API_TOKEN")
+    token = (
+        env("OPENPANEL_CLOUDFLARE_DNS_API_TOKEN")
+        or env("CLOUDFLARE_DNS_API_TOKEN")
+        or env("NPM_CLOUDFLARE_DNS_API_TOKEN")
+        or env("STALWART_ACME_DNS_CF_SECRET")
+    )
     if not token:
         raise RuntimeError("Cloudflare DNS token is required for OpenPanel NPM auto certificates")
 

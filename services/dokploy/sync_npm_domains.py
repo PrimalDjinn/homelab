@@ -373,7 +373,11 @@ def ensure_cloudflare_record(domain: str) -> None:
     zone_id = zone["id"]
     query = urllib.parse.urlencode({"name": domain, "per_page": "1"})
     existing = cloudflare_api("GET", f"/zones/{zone_id}/dns_records?{query}").get("result") or []
-    managed_record = next((record for record in existing if record.get("comment") == DNS_MANAGED_COMMENT), None)
+    if record_type == "CNAME":
+        conflicting = existing
+    else:
+        conflicting = [record for record in existing if record.get("type") in {record_type, "CNAME"}]
+    managed_record = next((record for record in conflicting if record.get("comment") == DNS_MANAGED_COMMENT), None)
     payload = {"type": record_type, "name": domain, "content": target, "ttl": ttl, "proxied": proxied, "comment": DNS_MANAGED_COMMENT}
 
     if managed_record:
@@ -389,8 +393,8 @@ def ensure_cloudflare_record(domain: str) -> None:
         cloudflare_api("PUT", f"/zones/{zone_id}/dns_records/{record['id']}", payload)
         print(f"Updated Cloudflare {record_type} record for {domain} -> {target}")
         return
-    if existing:
-        record = existing[0]
+    if conflicting:
+        record = conflicting[0]
         if (
             record.get("type") == record_type
             and record.get("content") == target

@@ -163,12 +163,7 @@ def api(method: str, path: str, token: str = "", payload: dict | None = None):
 
 
 def cloudflare_api(method: str, path: str, payload: dict | None = None):
-    token = (
-        env("OPENPANEL_CLOUDFLARE_DNS_API_TOKEN")
-        or env("CLOUDFLARE_DNS_API_TOKEN")
-        or env("NPM_CLOUDFLARE_DNS_API_TOKEN")
-        or env("STALWART_ACME_DNS_CF_SECRET")
-    )
+    token = cloudflare_token()
     if not token:
         raise RuntimeError("Cloudflare DNS token is not configured")
 
@@ -192,6 +187,15 @@ def cloudflare_api(method: str, path: str, payload: dict | None = None):
     if not parsed.get("success", False):
         raise RuntimeError(f"Cloudflare API {method} {path} failed: {body}")
     return parsed
+
+
+def cloudflare_token() -> str:
+    return (
+        env("OPENPANEL_CLOUDFLARE_DNS_API_TOKEN")
+        or env("CLOUDFLARE_DNS_API_TOKEN")
+        or env("NPM_CLOUDFLARE_DNS_API_TOKEN")
+        or env("STALWART_ACME_DNS_CF_SECRET")
+    )
 
 
 def domain_zone_candidates(domain: str) -> list[str]:
@@ -253,10 +257,14 @@ def ensure_cloudflare_record(domain: str) -> None:
     zone_id = zone["id"]
     query = urllib.parse.urlencode({"name": domain, "per_page": "1"})
     existing = cloudflare_api("GET", f"/zones/{zone_id}/dns_records?{query}").get("result") or []
+    if record_type == "CNAME":
+        conflicting = existing
+    else:
+        conflicting = [record for record in existing if record.get("type") in {record_type, "CNAME"}]
     managed_record = next(
         (
             record
-            for record in existing
+            for record in conflicting
             if record.get("comment") == DNS_MANAGED_COMMENT
         ),
         None,
@@ -284,8 +292,8 @@ def ensure_cloudflare_record(domain: str) -> None:
         print(f"Updated Cloudflare {record_type} record for {domain} -> {target}")
         return
 
-    if existing:
-        record = existing[0]
+    if conflicting:
+        record = conflicting[0]
         if (
             record.get("type") == record_type
             and record.get("content") == target
@@ -356,12 +364,7 @@ def proxy_host_update_payload(host: dict, certificate_id: int = 0, ssl_forced: b
 
 
 def certificate_payload(domain: str) -> dict:
-    token = (
-        env("OPENPANEL_CLOUDFLARE_DNS_API_TOKEN")
-        or env("CLOUDFLARE_DNS_API_TOKEN")
-        or env("NPM_CLOUDFLARE_DNS_API_TOKEN")
-        or env("STALWART_ACME_DNS_CF_SECRET")
-    )
+    token = cloudflare_token()
     if not token:
         raise RuntimeError("Cloudflare DNS token is required for OpenPanel NPM auto certificates")
 
@@ -439,9 +442,15 @@ def ensure_proxy_host(token: str, domain: str, inventory: dict[tuple[str, str], 
 
 def sync_public_domain(token: str, domain: str, inventory: dict[tuple[str, str], dict[str, str]]) -> None:
     host = ensure_proxy_host(token, domain, inventory)
-    if env("OPENPANEL_CLOUDFLARE_DNS_API_TOKEN") or env("CLOUDFLARE_DNS_API_TOKEN"):
+    if cloudflare_token():
         ensure_cloudflare_record(domain)
     if truthy(env("OPENPANEL_NPM_AUTO_CERTS", "true")):
+        if not cloudflare_token():
+            print("OpenPanel NPM auto certificates are enabled but no Cloudflare DNS token is set; skipping certificates")
+            return
+        if not cloudflare_zone_for_domain(domain):
+            print(f"No controlled Cloudflare zone found for {domain}; skipping NPM certificate")
+            return
         cert_id = ensure_certificate(token, domain)
         attach_certificate(token, host, cert_id)
 
@@ -514,8 +523,10 @@ def main() -> int:
         sync_public_domain(token, domain, inventory)
 
     remove_stale_managed_proxy_hosts(token, desired_proxy_domains, inventory)
-    if env("OPENPANEL_CLOUDFLARE_DNS_API_TOKEN") or env("CLOUDFLARE_DNS_API_TOKEN"):
+    if cloudflare_token():
         remove_stale_managed_dns_records(desired_domains)
+    elif env("OPENPANEL_CLOUDFLARE_DNS_TARGET"):
+        print("Cloudflare DNS target is configured but no DNS token is set; skipping DNS")
     remove_inventory_kind(inventory, "cloudflare_dns_record")
     save_inventory(inventory)
 

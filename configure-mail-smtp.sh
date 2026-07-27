@@ -70,7 +70,7 @@ EOF
 smtp_user=""
 smtp_pass=""
 smtp_host="stalwart"
-smtp_port="587"
+smtp_port="465"
 default_from=""
 generate_pass="false"
 

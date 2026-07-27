@@ -96,6 +96,18 @@ def apply_plan():
                 "defaultDomainId": f"name:{domain}",
             },
         },
+        {
+            "@type": "update",
+            "object": "MtaStageConnect",
+            # Expression language: string literals must be single-quoted.
+            "value": {
+                "hostname": {"match": {}, "else": f"'{hostname}'"},
+                "smtpGreeting": {
+                    "match": {},
+                    "else": f"'{hostname}' + ' Stalwart ESMTP at your service'",
+                },
+            },
+        },
     ]
 
     return plan

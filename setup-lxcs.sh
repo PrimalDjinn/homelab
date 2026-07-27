@@ -1000,7 +1000,10 @@ install_mail_lxc() {
     pct push "$ctid" "$SERVICES_DIR/mail/apply-stalwart-plan.sh" /opt/email-service/apply-stalwart-plan.sh
     pct push "$ctid" "$SERVICES_DIR/mail/update-smtp-credentials.sh" /opt/email-service/update-smtp-credentials.sh
     pct push "$ctid" "$SERVICES_DIR/mail/regenerate-stalwart-config.sh" /opt/email-service/regenerate-stalwart-config.sh
-    pct_exec "$ctid" "chmod 600 /opt/email-service/.env && chmod +x /opt/email-service/apply-stalwart-plan.sh /opt/email-service/update-smtp-credentials.sh /opt/email-service/regenerate-stalwart-config.sh /opt/email-service/scripts/stalwart-homelab/apply-inside.sh"
+    pct_exec "$ctid" "mkdir -p /opt/email-service/scripts/homelab-app"
+    pct push "$ctid" "$SERVICES_DIR/mail/patch-allowed-domains.sh" /opt/email-service/scripts/homelab-app/patch-allowed-domains.sh
+    pct push "$ctid" "$SERVICES_DIR/mail/app-entrypoint.sh" /opt/email-service/scripts/homelab-app/app-entrypoint.sh
+    pct_exec "$ctid" "chmod 600 /opt/email-service/.env && chmod +x /opt/email-service/apply-stalwart-plan.sh /opt/email-service/update-smtp-credentials.sh /opt/email-service/regenerate-stalwart-config.sh /opt/email-service/scripts/stalwart-homelab/apply-inside.sh /opt/email-service/scripts/homelab-app/patch-allowed-domains.sh /opt/email-service/scripts/homelab-app/app-entrypoint.sh"
 
     info "Freeing mail ports inside LXC $ctid before starting email-service"
     free_mail_ports_in_lxc "$ctid"

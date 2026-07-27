@@ -4,6 +4,17 @@ services:
 __HOMELAB_DNS_LINES__
     ports:
       - "3001:3000"
+    environment:
+      ALLOWED_DOMAINS: ${ALLOWED_DOMAINS:-}
+      NUXT_PUBLIC_ALLOWED_DOMAINS: ${NUXT_PUBLIC_ALLOWED_DOMAINS:-${ALLOWED_DOMAINS:-}}
+    volumes:
+      - ./scripts/homelab-app:/homelab:ro
+    entrypoint:
+      - /bin/sh
+      - /homelab/app-entrypoint.sh
+    command:
+      - node
+      - .output/server/index.mjs
 
   bulwark-web:
     dns:

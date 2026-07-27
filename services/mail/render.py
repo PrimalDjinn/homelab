@@ -97,6 +97,7 @@ def write_env(path: Path) -> None:
         "LISTMONK_TIMEZONE": env("LISTMONK_TIMEZONE", "Etc/UTC"),
         "STALWART_IMAGE": env("STALWART_IMAGE", "stalwartlabs/stalwart:latest"),
         "STALWART_HOSTNAME": mail_domain,
+        "STALWART_DEFAULT_DOMAIN": env("STALWART_DEFAULT_DOMAIN", domain),
         "STALWART_AUTODISCOVER_HOSTNAME": autodiscover_domain,
         "STALWART_AUTOCONFIG_HOSTNAME": autoconfig_domain,
         "STALWART_MTA_STS_HOSTNAME": mta_sts_domain,

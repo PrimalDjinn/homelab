@@ -76,8 +76,8 @@ def write_env(path: Path) -> None:
         "LISTMONK_API_URL": "http://listmonk-app:9000",
         "LISTMONK_USERNAME": env("LISTMONK_USERNAME", "admin"),
         "LISTMONK_PASSWORD": env("LISTMONK_PASSWORD"),
-        # Placeholder until configure-mail-smtp.sh / update-smtp-credentials.sh runs.
-        "SMTP_HOST": env("SMTP_HOST", "stalwart"),
+        # Use the public mail hostname so SMTPS cert SANs match (not docker name "stalwart").
+        "SMTP_HOST": env("SMTP_HOST", mail_domain),
         # Stalwart default listeners expose 25/465; submission 587 is often absent.
         "SMTP_PORT": env("SMTP_PORT", "465"),
         "SMTP_USER": smtp_user,

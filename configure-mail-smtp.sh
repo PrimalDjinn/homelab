@@ -69,7 +69,7 @@ EOF
 
 smtp_user=""
 smtp_pass=""
-smtp_host="stalwart"
+smtp_host=""
 smtp_port="465"
 default_from=""
 generate_pass="false"
@@ -128,6 +128,7 @@ fi
 }
 
 default_from="${default_from:-$smtp_user}"
+smtp_host="${smtp_host:-${STALWART_HOSTNAME:-$MAIL_DOMAIN}}"
 
 if ! command -v pct >/dev/null 2>&1; then
     error "pct not found. Run this on the Proxmox host."

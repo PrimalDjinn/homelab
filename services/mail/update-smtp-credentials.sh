@@ -17,7 +17,7 @@ EOF
 
 smtp_user=""
 smtp_pass=""
-smtp_host="stalwart"
+smtp_host=""
 smtp_port="465"
 default_from=""
 
@@ -55,6 +55,16 @@ fi
 default_from="${default_from:-$smtp_user}"
 
 cd /opt/email-service
+
+# Prefer cert-matching public hostname over docker service name "stalwart".
+if [[ -z "$smtp_host" ]]; then
+    # shellcheck disable=SC1091
+    set -a
+    # shellcheck disable=SC1091
+    source ./.env 2>/dev/null || true
+    set +a
+    smtp_host="${STALWART_HOSTNAME:-${MAIL_DOMAIN:-stalwart}}"
+fi
 
 set_env() {
     local key="$1" value="$2"

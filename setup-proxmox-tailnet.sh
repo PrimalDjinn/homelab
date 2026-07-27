@@ -100,7 +100,8 @@ main() {
         --login-server="$HEADSCALE_INTERNAL_URL" \
         --authkey="$key" \
         --hostname="$PROXMOX_TAILNET_HOSTNAME" \
-        --accept-dns=false
+        --accept-dns=false \
+        --accept-routes=false
 
     info "Proxmox UI should be reachable from joined tailnet devices at:"
     echo "https://$PROXMOX_TAILNET_HOSTNAME.tailnet.$DOMAIN:8006"

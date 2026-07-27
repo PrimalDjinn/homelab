@@ -39,15 +39,38 @@ The Proxmox web UI on port `8006` is closed to the public by default when `setup
 3. Confirm tailnet access works.
 4. Run `sudo ./lockdown-proxmox-8006.sh` to install explicit tailnet-only rules for `8006`.
 
+`setup-proxmox-tailnet.sh` joins with `--accept-routes=false`. The proxy LXC
+advertises `$HOMELAB_NETWORK_PREFIX.0/24` into the tailnet for remote clients;
+if the Proxmox host accepts that route, return traffic for local LXCs is stolen
+onto `tailscale0` and NAT/bridge connectivity breaks (LXCs can no longer reach
+the gateway or the internet).
+
 ## Mail and Stalwart
 
-The mail app starts with `EMAIL_PROVIDER=nodemailer` and placeholder SMTP credentials so its startup validation passes before the real Stalwart mailbox exists. After creating the real SMTP account, update the mail app inside the mail LXC and recreate only that app container:
+The mail app starts with `EMAIL_PROVIDER=nodemailer` and placeholder SMTP credentials so its startup validation passes before the real Stalwart mailbox exists.
+
+Mailbox addresses use `STALWART_DEFAULT_DOMAIN` (derived from `MAIL_DOMAIN` without the `mail.` prefix when unset), e.g. `noreply@heylomeet.com` for `MAIL_DOMAIN=mail.heylomeet.com`.
+
+After a developer creates the sending account in Stalwart, wire the mail API SMTP from the Proxmox host:
+
+```sh
+# Account already exists in Stalwart with a known password:
+sudo ./configure-mail-smtp.sh \
+  --user noreply@heylomeet.com \
+  --pass 'real-password' \
+  --from noreply@heylomeet.com
+
+# Or generate a password, then create the Stalwart mailbox to match:
+sudo ./configure-mail-smtp.sh --user noreply@heylomeet.com --generate-pass
+```
+
+Inside the mail LXC the same step is:
 
 ```sh
 sudo pct exec 113 -- bash -lc "/opt/email-service/update-smtp-credentials.sh \
-  --user noreply@example.com \
+  --user noreply@heylomeet.com \
   --pass 'real-password' \
-  --from noreply@example.com"
+  --from noreply@heylomeet.com"
 ```
 
 Stalwart runs on the current `config.json` startup model. The homelab override ports ChibaLLC's env-driven Stalwart setup into:
@@ -80,6 +103,31 @@ sudo ./reset.sh --yes
 `reset.sh` removes homelab-managed LXCs, state, firewall rules, and optionally the internal network, but it does **not** repair a broken Proxmox installation. Fix `pve-cluster`/`/etc/pve` first, then rerun `sudo ./main.sh --all`.
 
 ## Troubleshooting
+
+### LXCs cannot ping gateway or the internet
+
+Symptoms:
+
+- `ping 10.10.10.1` and `ping 1.1.1.1` fail inside LXCs
+- Host can still ping LXC IPs
+- `tcpdump` shows replies leaving via `tailscale0` instead of `vmbr10`
+
+Cause: the Proxmox host accepted the proxy's advertised `10.10.10.0/24` Tailscale
+route (`RouteAll: true`), so local bridge return traffic is misrouted.
+
+Fix on the Proxmox host:
+
+```sh
+sudo tailscale set --accept-routes=false
+ip route get 10.10.10.40   # should show dev vmbr10, not tailscale0
+sudo pct exec 113 -- ping -c2 1.1.1.1
+```
+
+Also ensure the host firewall trusts the internal bridge (`IN ACCEPT -i vmbr10`
+from `setup-subnet.sh`).
+
+This is **not** a Stalwart IP ban. Stalwart bans would still allow gateway/DNS
+reachability.
 
 ### Proxmox installed but `/etc/pve` is unavailable
 

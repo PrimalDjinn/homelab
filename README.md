@@ -1,11 +1,20 @@
+# Homelab
+
 ## Notes to self
 
-- First is to obviously setup Proxmox on a Debian VPS/VM/wherever - as long as the provider allows virtualisation all should be well. The script supports Debian 13 Trixie / Proxmox VE 9 using the current deb822 repository flow from https://pve.proxmox.com/wiki/Install_Proxmox_VE_on_Debian_13_Trixie, while still keeping the Debian 12 Bookworm path for existing hosts.
-- The setup a subnet, most providers will give a single IP, so subnetting for isolation and sharing is crutial
-- Then we set up a reverse proxy LXC using Nginx Proxy Manager for the UI. The Proxmox host forwards public 80/443 to this LXC; service ports stay on the internal bridge.
-- Then we set up an auth LXC using Authentik as the OIDC provider.
-- Next is to setup Headscale and Headplane in their own LXC, using the config-init/shared-config pattern from https://github.com/PrimalDjinn/mahede.
-- Dokploy is provisioned as its own high-resource LXC and exposed through the internal Headscale/NPM path at `dokploy.<domain>`.
+1. **Proxmox** — First, set up Proxmox on a Debian VPS/VM/wherever — as long as the provider allows virtualisation, all should be well. The script supports Debian 13 Trixie / Proxmox VE 9 using the current deb822 repository flow from the [Proxmox VE on Debian 13 Trixie wiki](https://pve.proxmox.com/wiki/Install_Proxmox_VE_on_Debian_13_Trixie), while still keeping the Debian 12 Bookworm path for existing hosts.
+
+2. **Subnet** — Then set up a subnet. Most providers will give a single IP, so subnetting for isolation and sharing is crucial.
+
+3. **Reverse proxy** — Then set up a reverse proxy LXC using Nginx Proxy Manager for the UI. The Proxmox host forwards public `80`/`443` to this LXC; service ports stay on the internal bridge.
+
+4. **Auth** — Then set up an auth LXC using Authentik as the OIDC provider.
+
+5. **Headscale** — Next, set up Headscale and Headplane in their own LXC, using the config-init/shared-config pattern from [PrimalDjinn/mahede](https://github.com/PrimalDjinn/mahede).
+
+6. **Dokploy** — Dokploy is provisioned as its own high-resource LXC and exposed through the internal Headscale/NPM path at `dokploy.<domain>`.
+
+## Quick start
 
 Copy `.env.example` to `.env`, set the real domain/IP choices, then run:
 
@@ -15,9 +24,22 @@ sudo ./main.sh --all
 
 After provisioning, read `/root/homelab/access.txt` on the Proxmox host for initial credentials, DNS records, Nginx Proxy Manager routes, and the generated `tailscale up` command.
 
-Headscale keeps its public server URL as `https://headscale.<domain>`. Internal service-to-service traffic uses direct internal addresses, for example Headplane talks to `http://headscale:8080` and the proxy LXC joins Headscale through `http://<headscale-lxc-ip>:8080`.
+## Networking and access
 
-The Proxmox web UI on `8006` is closed to the public by default when `setup-subnet.sh` manages the Proxmox host firewall. Keep `HOMELAB_PUBLIC_PROXMOX_8006=false`, join the Proxmox host to Headscale with `sudo ./setup-proxmox-tailnet.sh`, confirm tailnet access works, then run `sudo ./lockdown-proxmox-8006.sh` to install explicit tailnet-only rules for `8006`.
+### Headscale
+
+Headscale keeps its public server URL as `https://headscale.<domain>`. Internal service-to-service traffic uses direct internal addresses — for example, Headplane talks to `http://headscale:8080` and the proxy LXC joins Headscale through `http://<headscale-lxc-ip>:8080`.
+
+### Proxmox UI lockdown
+
+The Proxmox web UI on port `8006` is closed to the public by default when `setup-subnet.sh` manages the Proxmox host firewall.
+
+1. Keep `HOMELAB_PUBLIC_PROXMOX_8006=false`.
+2. Join the Proxmox host to Headscale with `sudo ./setup-proxmox-tailnet.sh`.
+3. Confirm tailnet access works.
+4. Run `sudo ./lockdown-proxmox-8006.sh` to install explicit tailnet-only rules for `8006`.
+
+## Mail and Stalwart
 
 The mail app starts with `EMAIL_PROVIDER=nodemailer` and placeholder SMTP credentials so its startup validation passes before the real Stalwart mailbox exists. After creating the real SMTP account, update the mail app inside the mail LXC and recreate only that app container:
 
@@ -28,13 +50,23 @@ sudo pct exec 113 -- bash -lc "/opt/email-service/update-smtp-credentials.sh \
   --from noreply@example.com"
 ```
 
-Stalwart runs on the current `config.json` startup model. The homelab override ports ChibaLLC's env-driven Stalwart setup into `/etc/stalwart/config.json`, `/etc/stalwart/bootstrap.json`, and `/etc/stalwart/apply-plan.ndjson`, persists `/etc/stalwart` and `/var/lib/stalwart`, and starts Stalwart with `--config /etc/stalwart/config.json`. If Stalwart has stale or incomplete config after env changes, regenerate and restart it with:
+Stalwart runs on the current `config.json` startup model. The homelab override ports ChibaLLC's env-driven Stalwart setup into:
+
+- `/etc/stalwart/config.json`
+- `/etc/stalwart/bootstrap.json`
+- `/etc/stalwart/apply-plan.ndjson`
+
+It persists `/etc/stalwart` and `/var/lib/stalwart`, and starts Stalwart with `--config /etc/stalwart/config.json`.
+
+If Stalwart has stale or incomplete config after env changes, regenerate and restart it with:
 
 ```sh
 sudo pct exec 113 -- bash -lc "/opt/email-service/regenerate-stalwart-config.sh"
 ```
 
-> **TODO**: Investigate why the new way of generating configs may not work.
+> **TODO:** Investigate why the new way of generating configs may not work.
+
+## Reset (testing)
 
 During testing, reset managed service resources with:
 
@@ -42,9 +74,14 @@ During testing, reset managed service resources with:
 sudo ./reset.sh --yes
 ```
 
-Add `--network` to remove the internal bridge/NAT/dnsmasq config, and `--proxmox` to clear Proxmox setup markers and restore `/etc/hosts` from the setup backup.
+- Add `--network` to remove the internal bridge/NAT/dnsmasq config.
+- Add `--proxmox` to clear Proxmox setup markers and restore `/etc/hosts` from the setup backup.
 
-## Troubleshooting: Proxmox installed but `/etc/pve` is unavailable
+`reset.sh` removes homelab-managed LXCs, state, firewall rules, and optionally the internal network, but it does **not** repair a broken Proxmox installation. Fix `pve-cluster`/`/etc/pve` first, then rerun `sudo ./main.sh --all`.
+
+## Troubleshooting
+
+### Proxmox installed but `/etc/pve` is unavailable
 
 The scripts need Proxmox to be both installed and operational. A host can reach an inconsistent state where Proxmox packages are installed, so `setup-proxmox.sh` reports that Proxmox is already installed, but the Proxmox config filesystem is not mounted:
 
@@ -53,7 +90,7 @@ Proxmox config filesystem is unavailable at /etc/pve/nodes
 unable to open file '/etc/pve/nodes/<node>/lxc/<id>.conf.tmp...' - No such file or directory
 ```
 
-This usually means `pve-cluster`/`pmxcfs` is not healthy. Do not create `/etc/pve/nodes` manually; Proxmox owns that filesystem.
+This usually means `pve-cluster`/`pmxcfs` is not healthy. Do **not** create `/etc/pve/nodes` manually; Proxmox owns that filesystem.
 
 Check the host:
 
@@ -85,9 +122,7 @@ sudo systemctl restart pve-cluster
 
 Also verify `/etc/hosts` maps the hostname to a real host IP. Proxmox services can fail when the node hostname cannot resolve cleanly.
 
-`reset.sh` removes homelab-managed LXCs, state, firewall rules, and optionally the internal network, but it does not repair a broken Proxmox installation. Fix `pve-cluster`/`/etc/pve` first, then rerun `sudo ./main.sh --all`.
-
-## Troubleshooting: `DNS resolution error: no connections available`
+### `DNS resolution error: no connections available`
 
 This usually means a container resolved AAAA records, but the parent LXC still has no usable IPv6 route.
 
@@ -114,7 +149,7 @@ After applying the updated scripts, restart the affected Docker stack so it pick
 sudo pct exec 113 -- bash -lc "cd /opt/email-service && docker compose -f ./docker-compose.prod.yml -f ./docker-compose.homelab.yml --env-file .env up -d --force-recreate"
 ```
 
-## Managed NPM And DNS
+## Managed NPM and DNS
 
 Homelab-created Nginx Proxy Manager hosts are marked with `# homelab-managed` in `advanced_config` and tracked in a CSV inventory inside the proxy LXC.
 
@@ -136,4 +171,4 @@ The `dokploy.<domain>` route is internal/tailnet-oriented like `openadmin.<domai
 
 - Headscale DNS points `dokploy.<domain>` at the proxy tailnet IP.
 - Nginx Proxy Manager forwards `dokploy.<domain>` to `http://10.10.10.60:3000`.
-- The installer does not include `dokploy.<domain>` in the public LetsEncrypt SAN set by default.
+- The installer does not include `dokploy.<domain>` in the public Let's Encrypt SAN set by default.

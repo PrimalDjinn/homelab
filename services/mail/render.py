@@ -78,12 +78,17 @@ def write_env(path: Path) -> None:
         "LISTMONK_PASSWORD": env("LISTMONK_PASSWORD"),
         # Placeholder until configure-mail-smtp.sh / update-smtp-credentials.sh runs.
         "SMTP_HOST": env("SMTP_HOST", "stalwart"),
-        "SMTP_PORT": env("SMTP_PORT", "587"),
+        # Stalwart default listeners expose 25/465; submission 587 is often absent.
+        "SMTP_PORT": env("SMTP_PORT", "465"),
         "SMTP_USER": smtp_user,
         "SMTP_PASS": env("SMTP_PASS", env("PLACEHOLDER_SMTP_PASS", "ChangeMe1!placeholder")),
         "DEFAULT_FROM": default_from,
         "JWT_SECRET": env("EMAIL_JWT_SECRET"),
-        "ALLOWED_DOMAINS": env("ALLOWED_DOMAINS", email_domain),
+        "ALLOWED_DOMAINS": env("ALLOWED_DOMAINS", f"{email_domain},ifkafin.com" if email_domain != "ifkafin.com" else email_domain),
+        "NUXT_PUBLIC_ALLOWED_DOMAINS": env(
+            "NUXT_PUBLIC_ALLOWED_DOMAINS",
+            env("ALLOWED_DOMAINS", f"{email_domain},ifkafin.com" if email_domain != "ifkafin.com" else email_domain),
+        ),
         "POSTAL_IMAGE": env("POSTAL_IMAGE", "ghcr.io/postalserver/postal:latest"),
         "POSTAL_DB_NAME": env("POSTAL_DB_NAME", "postal"),
         "POSTAL_DB_ROOT_PASSWORD": env("POSTAL_DB_ROOT_PASSWORD"),

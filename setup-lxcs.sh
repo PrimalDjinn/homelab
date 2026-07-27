@@ -984,10 +984,11 @@ install_mail_lxc() {
     pct push "$ctid" "$GENERATED_DIR/mail/docker-compose.homelab.yml" /opt/email-service/docker-compose.homelab.yml
     pct_exec "$ctid" "mkdir -p /opt/email-service/scripts/stalwart-homelab"
     pct push "$ctid" "$GENERATED_DIR/mail/scripts/stalwart-homelab/init.py" /opt/email-service/scripts/stalwart-homelab/init.py
+    pct push "$ctid" "$GENERATED_DIR/mail/scripts/stalwart-homelab/apply-inside.sh" /opt/email-service/scripts/stalwart-homelab/apply-inside.sh
     pct push "$ctid" "$SERVICES_DIR/mail/apply-stalwart-plan.sh" /opt/email-service/apply-stalwart-plan.sh
     pct push "$ctid" "$SERVICES_DIR/mail/update-smtp-credentials.sh" /opt/email-service/update-smtp-credentials.sh
     pct push "$ctid" "$SERVICES_DIR/mail/regenerate-stalwart-config.sh" /opt/email-service/regenerate-stalwart-config.sh
-    pct_exec "$ctid" "chmod 600 /opt/email-service/.env && chmod +x /opt/email-service/apply-stalwart-plan.sh /opt/email-service/update-smtp-credentials.sh /opt/email-service/regenerate-stalwart-config.sh"
+    pct_exec "$ctid" "chmod 600 /opt/email-service/.env && chmod +x /opt/email-service/apply-stalwart-plan.sh /opt/email-service/update-smtp-credentials.sh /opt/email-service/regenerate-stalwart-config.sh /opt/email-service/scripts/stalwart-homelab/apply-inside.sh"
 
     info "Freeing mail ports inside LXC $ctid before starting email-service"
     free_mail_ports_in_lxc "$ctid"

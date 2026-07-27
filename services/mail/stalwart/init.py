@@ -25,6 +25,11 @@ def secret_env(name):
     return {"@type": "EnvironmentVariable", "variableName": name}
 
 
+def default_domain(hostname):
+    parts = hostname.split(".", 1)
+    return parts[1] if len(parts) == 2 else hostname
+
+
 def datastore():
     return {
         "@type": "PostgreSql",
@@ -60,6 +65,7 @@ def dns_resolver():
 
 def apply_plan():
     hostname = env("STALWART_HOSTNAME", "mail.example.com")
+    domain = env("STALWART_DEFAULT_DOMAIN", default_domain(hostname))
     http_headers = {}
     origins = csv("STALWART_HTTP_CORS_ALLOWED_ORIGINS")
     if origins:
@@ -85,7 +91,10 @@ def apply_plan():
         {
             "@type": "update",
             "object": "SystemSettings",
-            "value": {"defaultHostname": hostname},
+            "value": {
+                "defaultHostname": hostname,
+                "defaultDomainId": f"name:{domain}",
+            },
         },
     ]
 

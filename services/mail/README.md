@@ -25,7 +25,9 @@ ports the ChibaLLC Stalwart env surface into current Stalwart artifacts:
 
 - `/etc/stalwart/config.json`: the startup datastore pointer.
 - `/etc/stalwart/apply-plan.ndjson`: declarative CLI operations for DB-backed
-  Stalwart settings.
+  Stalwart settings. `SystemSettings.defaultDomainId` is required by current
+  Stalwart releases; `apply-stalwart-plan.sh` ensures the
+  `STALWART_DEFAULT_DOMAIN` Domain exists and injects its id before apply.
 
 Stalwart still starts with `--config /etc/stalwart/config.json`, and persistent
 state is mounted at `/etc/stalwart` and `/var/lib/stalwart`. Current Stalwart

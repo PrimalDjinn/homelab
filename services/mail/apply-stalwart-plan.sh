@@ -13,6 +13,16 @@ network="${COMPOSE_PROJECT_NAME:-email-service}_default"
 plan_file="$(mktemp)"
 trap 'rm -f "$plan_file"' EXIT
 
+hostname="${STALWART_HOSTNAME:-mail.example.com}"
+domain="${STALWART_DEFAULT_DOMAIN:-}"
+if [[ -z "$domain" ]]; then
+  if [[ "$hostname" == *.* ]]; then
+    domain="${hostname#*.}"
+  else
+    domain="$hostname"
+  fi
+fi
+
 "${compose[@]}" exec -T stalwart sh -lc 'cat /etc/stalwart/apply-plan.ndjson' \
   | grep -v '"object":"Bootstrap"' \
   | grep -v '"object":"AcmeProvider"' \
@@ -22,15 +32,11 @@ docker run --rm \
   --network "$network" \
   -e STALWART_ADMIN_USER \
   -e STALWART_ADMIN_PASSWORD \
-  -v "$plan_file:/plan.ndjson:ro" \
-  alpine:3.20 sh -lc '
-    apk add --no-cache ca-certificates curl >/dev/null
-    curl --proto "=https" --tlsv1.2 -LsSf https://github.com/stalwartlabs/cli/releases/latest/download/stalwart-cli-installer.sh | sh >/dev/null
-    /root/.cargo/bin/stalwart-cli \
-      --url http://stalwart:8080 \
-      --user "$STALWART_ADMIN_USER" \
-      --password "$STALWART_ADMIN_PASSWORD" \
-      apply --file /plan.ndjson --no-color
-  '
+  -e STALWART_HOSTNAME="$hostname" \
+  -e STALWART_DEFAULT_DOMAIN="$domain" \
+  -e PLAN_FILE=/plan.ndjson \
+  -v "$plan_file:/plan.ndjson:rw" \
+  -v /opt/email-service/scripts/stalwart-homelab/apply-inside.sh:/apply-inside.sh:ro \
+  alpine:3.20 sh /apply-inside.sh
 
 "${compose[@]}" restart stalwart

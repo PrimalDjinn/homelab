@@ -34,9 +34,16 @@ def docker_dns_servers() -> list[str]:
     return env("HOMELAB_DOCKER_DNS_SERVERS", env("HOMELAB_DNS_SERVERS", default_servers)).split()
 
 
+def strip_mail_prefix(value: str) -> str:
+    host = hostname(value)
+    return host[5:] if host.startswith("mail.") else host
+
+
 def write_env(path: Path) -> None:
     domain = env("DOMAIN", env("SERVER_HOST", "example.com"))
     mail_domain = hostname(env("MAIL_DOMAIN", f"mail.{domain}"))
+    # Mailbox/address domain (e.g. heylomeet.com), not the mail server hostname.
+    email_domain = hostname(env("STALWART_DEFAULT_DOMAIN") or strip_mail_prefix(mail_domain) or strip_mail_prefix(domain))
     _ = env("EMAIL_APP_DOMAIN", f"email.{domain}")
     webmail_domain = env("WEBMAIL_DOMAIN", f"webmail.{domain}")
     _ = env("LISTMONK_DOMAIN", f"listmonk.{domain}")
@@ -45,8 +52,10 @@ def write_env(path: Path) -> None:
     autodiscover_domain = env("AUTODISCOVER_DOMAIN", f"autodiscover.{domain}")
     autoconfig_domain = env("AUTOCONFIG_DOMAIN", f"autoconfig.{domain}")
     mta_sts_domain = env("MTA_STS_DOMAIN", f"mta-sts.{domain}")
-    le_email = env("LE_EMAIL", f"postmaster@{domain}")
+    le_email = env("LE_EMAIL", f"postmaster@{email_domain}")
     stalwart_cf_secret = env("STALWART_ACME_DNS_CF_SECRET", env("CLOUDFLARE_DNS_API_TOKEN"))
+    smtp_user = env("SMTP_USER", f"noreply@{email_domain}")
+    default_from = env("DEFAULT_FROM", smtp_user)
 
     values = {
         "COMPOSE_PROJECT_NAME": "email-service",
@@ -67,13 +76,14 @@ def write_env(path: Path) -> None:
         "LISTMONK_API_URL": "http://listmonk-app:9000",
         "LISTMONK_USERNAME": env("LISTMONK_USERNAME", "admin"),
         "LISTMONK_PASSWORD": env("LISTMONK_PASSWORD"),
+        # Placeholder until configure-mail-smtp.sh / update-smtp-credentials.sh runs.
         "SMTP_HOST": env("SMTP_HOST", "stalwart"),
         "SMTP_PORT": env("SMTP_PORT", "587"),
-        "SMTP_USER": env("SMTP_USER", f"noreply@{domain}"),
+        "SMTP_USER": smtp_user,
         "SMTP_PASS": env("SMTP_PASS", env("PLACEHOLDER_SMTP_PASS", "ChangeMe1!placeholder")),
-        "DEFAULT_FROM": env("DEFAULT_FROM", f"noreply@{domain}"),
+        "DEFAULT_FROM": default_from,
         "JWT_SECRET": env("EMAIL_JWT_SECRET"),
-        "ALLOWED_DOMAINS": env("ALLOWED_DOMAINS", domain),
+        "ALLOWED_DOMAINS": env("ALLOWED_DOMAINS", email_domain),
         "POSTAL_IMAGE": env("POSTAL_IMAGE", "ghcr.io/postalserver/postal:latest"),
         "POSTAL_DB_NAME": env("POSTAL_DB_NAME", "postal"),
         "POSTAL_DB_ROOT_PASSWORD": env("POSTAL_DB_ROOT_PASSWORD"),
@@ -97,7 +107,7 @@ def write_env(path: Path) -> None:
         "LISTMONK_TIMEZONE": env("LISTMONK_TIMEZONE", "Etc/UTC"),
         "STALWART_IMAGE": env("STALWART_IMAGE", "stalwartlabs/stalwart:latest"),
         "STALWART_HOSTNAME": mail_domain,
-        "STALWART_DEFAULT_DOMAIN": env("STALWART_DEFAULT_DOMAIN", domain),
+        "STALWART_DEFAULT_DOMAIN": email_domain,
         "STALWART_AUTODISCOVER_HOSTNAME": autodiscover_domain,
         "STALWART_AUTOCONFIG_HOSTNAME": autoconfig_domain,
         "STALWART_MTA_STS_HOSTNAME": mta_sts_domain,
@@ -160,7 +170,7 @@ def write_env(path: Path) -> None:
         "BULWARK_OAUTH_CLIENT_SECRET": env("BULWARK_OAUTH_CLIENT_SECRET"),
         "BULWARK_OAUTH_ISSUER_URL": env("BULWARK_OAUTH_ISSUER_URL"),
         "BULWARK_APP_NAME": env("BULWARK_APP_NAME", "Webmail"),
-        "BULWARK_LOGIN_COMPANY_NAME": env("BULWARK_LOGIN_COMPANY_NAME", domain),
+        "BULWARK_LOGIN_COMPANY_NAME": env("BULWARK_LOGIN_COMPANY_NAME", email_domain),
         "BULWARK_TRAEFIK_ENABLED": "false",
         "LIBREDESK_SYSTEM_USER_PASSWORD": env("LIBREDESK_SYSTEM_USER_PASSWORD"),
         "LIBREDESK_POSTGRES_USER": env("LIBREDESK_POSTGRES_USER", "master"),

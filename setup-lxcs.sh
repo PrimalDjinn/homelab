@@ -891,6 +891,8 @@ systemctl enable --now unattended-upgrades"
 install_docker() {
     local ctid="$1"
     local docker_installed_now="false"
+    local dns_result=""
+    local dns_script
 
     if ! pct_exec "$ctid" "command -v docker >/dev/null 2>&1"; then
         info "Installing Docker in LXC $ctid"
@@ -902,44 +904,54 @@ install_docker() {
     pct_exec "$ctid" "systemctl enable --now docker"
 
     info "Configuring Docker DNS defaults in LXC $ctid"
-    pct_exec "$ctid" "mkdir -p /etc/docker && HOMELAB_DOCKER_DNS_JSON=$(quote "$(docker_dns_servers_json)") python3 - <<'PY'
+    dns_script="$(mktemp)"
+    cat > "$dns_script" <<'PY'
 import json
 import os
 from pathlib import Path
-import sys
 
-path = Path('/etc/docker/daemon.json')
+path = Path("/etc/docker/daemon.json")
 data = {}
 if path.exists():
     try:
         data = json.loads(path.read_text())
     except json.JSONDecodeError as exc:
-        raise SystemExit(f'Existing /etc/docker/daemon.json is invalid JSON: {exc}')
+        raise SystemExit(f"Existing /etc/docker/daemon.json is invalid JSON: {exc}")
 
-data['ipv6'] = False
-data['dns'] = json.loads(os.environ['HOMELAB_DOCKER_DNS_JSON'])
-rendered = json.dumps(data, indent=2, sort_keys=True) + '\n'
+data["ipv6"] = False
+data["dns"] = json.loads(os.environ["HOMELAB_DOCKER_DNS_JSON"])
+rendered = json.dumps(data, indent=2, sort_keys=True) + "\n"
 if path.exists() and path.read_text() == rendered:
-    sys.exit(0)
-
-path.write_text(rendered)
-sys.exit(10)
+    print("unchanged")
+else:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(rendered)
+    print("changed")
 PY
-daemon_status=\$?
-if [[ $(quote "$docker_installed_now") == true || \$daemon_status -eq 10 ]]; then
-    systemctl restart docker
-elif [[ \$daemon_status -ne 0 ]]; then
-    exit \$daemon_status
-fi"
+    pct push "$ctid" "$dns_script" /tmp/homelab-docker-dns.py
+    rm -f "$dns_script"
+    dns_result="$(
+        pct_exec "$ctid" "HOMELAB_DOCKER_DNS_JSON=$(quote "$(docker_dns_servers_json)") python3 /tmp/homelab-docker-dns.py"
+    )"
+    dns_result="${dns_result//$'\r'/}"
+    dns_result="${dns_result##*$'\n'}"
+
+    if [[ "$docker_installed_now" == "true" || "$dns_result" == "changed" ]]; then
+        info "Restarting Docker in LXC $ctid to apply daemon.json"
+        pct_exec "$ctid" "systemctl restart docker"
+    elif [[ "$dns_result" != "unchanged" ]]; then
+        error "Unexpected Docker DNS configure result in LXC $ctid: ${dns_result:-<empty>}"
+    fi
 }
 
 export_mail_env() {
     export DOMAIN MAIL_DOMAIN EMAIL_APP_DOMAIN WEBMAIL_DOMAIN LISTMONK_DOMAIN POSTAL_DOMAIN
     export LIBREDESK_DOMAIN AUTODISCOVER_DOMAIN AUTOCONFIG_DOMAIN MTA_STS_DOMAIN LE_EMAIL
     export CLOUDFLARE_DNS_API_TOKEN STALWART_ACME_ENABLED STALWART_ACME_DNS_PROVIDER STALWART_ACME_DNS_CF_SECRET
-    export STALWART_HTTP_PERMISSIVE_CORS
+    export STALWART_HTTP_PERMISSIVE_CORS STALWART_DEFAULT_DOMAIN
     export STALWART_DNS_RESOLVER STALWART_DNS_USE_TLS
     export HOMELAB_DNS_SERVERS HOMELAB_DOCKER_DNS_SERVERS BULWARK_JMAP_SERVER_URL
+    export EMAIL_PROVIDER SMTP_HOST SMTP_PORT SMTP_USER SMTP_PASS DEFAULT_FROM ALLOWED_DOMAINS
 
     export EMAIL_POSTGRES_USER="${EMAIL_POSTGRES_USER:-email_service}"
     export EMAIL_POSTGRES_PASSWORD="${EMAIL_POSTGRES_PASSWORD:-$(secret_file "$SECRETS_DIR/email-postgres-password" 32)}"
@@ -1426,6 +1438,7 @@ install_auth_lxc() {
     bootstrap_lxc "$ctid"
     install_docker "$ctid"
 
+    info "Deploying Authentik in LXC $ctid"
     bootstrap_password="${AUTHENTIK_BOOTSTRAP_PASSWORD:-$(strong_secret_file "$SECRETS_DIR/authentik-bootstrap-password" 24)}"
     bootstrap_token="${AUTHENTIK_BOOTSTRAP_TOKEN:-$(secret_file "$SECRETS_DIR/authentik-bootstrap-token" 48)}"
     postgres_password="${AUTHENTIK_POSTGRES_PASSWORD:-$(secret_file "$SECRETS_DIR/authentik-postgres-password" 32)}"

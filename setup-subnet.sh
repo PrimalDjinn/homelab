@@ -298,6 +298,7 @@ configure_pve_firewall() {
     echo "[+] Ensuring Proxmox host firewall rules in $firewall_file"
     rules_file="$(mktemp)"
     cat > "$rules_file" <<EOF
+IN ACCEPT -i $VM_BRIDGE -log nolog # HOMELAB trusted internal bridge
 IN ACCEPT -p tcp -dport 22 -log nolog # HOMELAB SSH
 IN ACCEPT -p tcp -dport 80 -log nolog # HOMELAB HTTP reverse proxy
 IN ACCEPT -p tcp -dport 443 -log nolog # HOMELAB HTTPS reverse proxy
@@ -305,9 +306,6 @@ IN ACCEPT -p tcp -dport 5900:5999 -log nolog # HOMELAB Proxmox VNC
 IN ACCEPT -p tcp -dport 3128 -log nolog # HOMELAB Proxmox SPICE proxy
 IN ACCEPT -p udp -dport $WIREGUARD_PORT -log nolog # HOMELAB WireGuard
 IN ACCEPT -p udp -dport $TAILSCALE_WIREGUARD_PORT -log nolog # HOMELAB Tailscale/Headscale WireGuard direct
-IN ACCEPT -p tcp -i $VM_BRIDGE -dport 53 -log nolog # HOMELAB internal DNS
-IN ACCEPT -p udp -i $VM_BRIDGE -dport 53 -log nolog # HOMELAB internal DNS
-IN ACCEPT -p udp -i $VM_BRIDGE -dport 67 -log nolog # HOMELAB internal DHCP
 EOF
     if [[ "$PUBLIC_PROXMOX_8006" == "true" ]]; then
         echo "IN ACCEPT -p tcp -dport 8006 -log nolog # HOMELAB Proxmox Web UI" >> "$rules_file"

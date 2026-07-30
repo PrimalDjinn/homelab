@@ -69,7 +69,7 @@ def write_env(path: Path) -> None:
         "LISTMONK_PASSWORD": env("LISTMONK_PASSWORD"),
         "JWT_SECRET": env("EMAIL_JWT_SECRET"),
         "SETTINGS_ENCRYPTION_KEY": env("SETTINGS_ENCRYPTION_KEY"),
-        "DASHBOARD_ADMIN_EMAILS": env("DASHBOARD_ADMIN_EMAILS", f"allan.bosire@ifkafin.com"),
+        "DASHBOARD_ADMIN_EMAILS": env("DASHBOARD_ADMIN_EMAILS", f"archiethebig@gmail.com"),
         "INBOUND_CONFIG_ENCRYPTION_KEY": env("INBOUND_CONFIG_ENCRYPTION_KEY"),
         "INBOUND_WEBHOOK_ALLOW_PRIVATE_NETWORKS": env("INBOUND_WEBHOOK_ALLOW_PRIVATE_NETWORKS", "false"),
         "ALLOWED_DOMAINS": env("ALLOWED_DOMAINS", f"{email_domain},ifkafin.com" if email_domain != "ifkafin.com" else email_domain),

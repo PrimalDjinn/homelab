@@ -957,6 +957,12 @@ export_mail_env() {
     export EMAIL_POSTGRES_PASSWORD="${EMAIL_POSTGRES_PASSWORD:-$(secret_file "$SECRETS_DIR/email-postgres-password" 32)}"
     export EMAIL_POSTGRES_DB="${EMAIL_POSTGRES_DB:-email_service}"
     export EMAIL_JWT_SECRET="${EMAIL_JWT_SECRET:-$(secret_file "$SECRETS_DIR/email-jwt-secret" 64)}"
+    if [[ ! -s "$SECRETS_DIR/email-inbound-config-encryption-key" ]]; then
+        openssl rand -base64 32 > "$SECRETS_DIR/email-inbound-config-encryption-key"
+        chmod 600 "$SECRETS_DIR/email-inbound-config-encryption-key"
+    fi
+    export INBOUND_CONFIG_ENCRYPTION_KEY="${INBOUND_CONFIG_ENCRYPTION_KEY:-$(cat "$SECRETS_DIR/email-inbound-config-encryption-key")}"
+    export DASHBOARD_ADMIN_EMAILS="${DASHBOARD_ADMIN_EMAILS:-allan.bosire@ifkafin.com}"
     export POSTAL_SERVER_API_KEY="${POSTAL_SERVER_API_KEY:-$(secret_file "$SECRETS_DIR/postal-server-api-key" 48)}"
     export LISTMONK_PASSWORD="${LISTMONK_PASSWORD:-$(secret_file "$SECRETS_DIR/listmonk-api-password" 32)}"
     export POSTAL_DB_ROOT_PASSWORD="${POSTAL_DB_ROOT_PASSWORD:-$(secret_file "$SECRETS_DIR/postal-db-root-password" 32)}"

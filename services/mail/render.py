@@ -84,6 +84,9 @@ def write_env(path: Path) -> None:
         "SMTP_PASS": env("SMTP_PASS", env("PLACEHOLDER_SMTP_PASS", "ChangeMe1!placeholder")),
         "DEFAULT_FROM": default_from,
         "JWT_SECRET": env("EMAIL_JWT_SECRET"),
+        "DASHBOARD_ADMIN_EMAILS": env("DASHBOARD_ADMIN_EMAILS", f"allan.bosire@ifkafin.com"),
+        "INBOUND_CONFIG_ENCRYPTION_KEY": env("INBOUND_CONFIG_ENCRYPTION_KEY"),
+        "INBOUND_WEBHOOK_ALLOW_PRIVATE_NETWORKS": env("INBOUND_WEBHOOK_ALLOW_PRIVATE_NETWORKS", "false"),
         "ALLOWED_DOMAINS": env("ALLOWED_DOMAINS", f"{email_domain},ifkafin.com" if email_domain != "ifkafin.com" else email_domain),
         "NUXT_PUBLIC_ALLOWED_DOMAINS": env(
             "NUXT_PUBLIC_ALLOWED_DOMAINS",

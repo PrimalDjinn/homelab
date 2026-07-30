@@ -47,31 +47,14 @@ the gateway or the internet).
 
 ## Mail and Stalwart
 
-The mail app starts with `EMAIL_PROVIDER=nodemailer` and placeholder SMTP credentials so its startup validation passes before the real Stalwart mailbox exists.
+The mail app stores outbound provider configuration in its database and
+encrypts credentials with `SETTINGS_ENCRYPTION_KEY`. The dashboard remains
+available before a provider is configured, but sending is disabled.
 
 Mailbox addresses use `STALWART_DEFAULT_DOMAIN` (derived from `MAIL_DOMAIN` without the `mail.` prefix when unset), e.g. `noreply@heylomeet.com` for `MAIL_DOMAIN=mail.heylomeet.com`.
 
-After a developer creates the sending account in Stalwart, wire the mail API SMTP from the Proxmox host:
-
-```sh
-# Account already exists in Stalwart with a known password:
-sudo ./configure-mail-smtp.sh \
-  --user noreply@heylomeet.com \
-  --pass 'real-password' \
-  --from noreply@heylomeet.com
-
-# Or generate a password, then create the Stalwart mailbox to match:
-sudo ./configure-mail-smtp.sh --user noreply@heylomeet.com --generate-pass
-```
-
-Inside the mail LXC the same step is:
-
-```sh
-sudo pct exec 113 -- bash -lc "/opt/email-service/update-smtp-credentials.sh \
-  --user noreply@heylomeet.com \
-  --pass 'real-password' \
-  --from noreply@heylomeet.com"
-```
+After creating the sending account in Stalwart, open **Outbound email** in the
+email dashboard and configure the SMTP host, port, account, and default sender.
 
 Stalwart runs on the current `config.json` startup model. The homelab override ports ChibaLLC's env-driven Stalwart setup into:
 

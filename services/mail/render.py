@@ -54,9 +54,6 @@ def write_env(path: Path) -> None:
     mta_sts_domain = env("MTA_STS_DOMAIN", f"mta-sts.{domain}")
     le_email = env("LE_EMAIL", f"postmaster@{email_domain}")
     stalwart_cf_secret = env("STALWART_ACME_DNS_CF_SECRET", env("CLOUDFLARE_DNS_API_TOKEN"))
-    smtp_user = env("SMTP_USER", f"noreply@{email_domain}")
-    default_from = env("DEFAULT_FROM", smtp_user)
-
     values = {
         "COMPOSE_PROJECT_NAME": "email-service",
         "POSTGRES_USER": env("EMAIL_POSTGRES_USER", "email_service"),
@@ -67,23 +64,11 @@ def write_env(path: Path) -> None:
             f"{env('EMAIL_POSTGRES_PASSWORD')}@postgres:5432/{env('EMAIL_POSTGRES_DB', 'email_service')}"
         ),
         "REDIS_URL": "redis://redis:6379",
-        "EMAIL_PROVIDER": env("EMAIL_PROVIDER", "nodemailer"),
-        "RESEND_API_KEY": env("RESEND_API_KEY"),
-        "SENDGRID_API_KEY": env("SENDGRID_API_KEY"),
-        "MAILCHIMP_TRANSACTIONAL_API_KEY": env("MAILCHIMP_TRANSACTIONAL_API_KEY"),
-        "POSTAL_API_URL": "http://postal-web:5000",
-        "POSTAL_SERVER_API_KEY": env("POSTAL_SERVER_API_KEY"),
         "LISTMONK_API_URL": "http://listmonk-app:9000",
         "LISTMONK_USERNAME": env("LISTMONK_USERNAME", "admin"),
         "LISTMONK_PASSWORD": env("LISTMONK_PASSWORD"),
-        # Placeholder until configure-mail-smtp.sh / update-smtp-credentials.sh runs.
-        "SMTP_HOST": env("SMTP_HOST", "stalwart"),
-        # Stalwart default listeners expose 25/465; submission 587 is often absent.
-        "SMTP_PORT": env("SMTP_PORT", "465"),
-        "SMTP_USER": smtp_user,
-        "SMTP_PASS": env("SMTP_PASS", env("PLACEHOLDER_SMTP_PASS", "ChangeMe1!placeholder")),
-        "DEFAULT_FROM": default_from,
         "JWT_SECRET": env("EMAIL_JWT_SECRET"),
+        "SETTINGS_ENCRYPTION_KEY": env("SETTINGS_ENCRYPTION_KEY"),
         "DASHBOARD_ADMIN_EMAILS": env("DASHBOARD_ADMIN_EMAILS", f"archiethebig@gmail.com"),
         "INBOUND_CONFIG_ENCRYPTION_KEY": env("INBOUND_CONFIG_ENCRYPTION_KEY"),
         "INBOUND_WEBHOOK_ALLOW_PRIVATE_NETWORKS": env("INBOUND_WEBHOOK_ALLOW_PRIVATE_NETWORKS", "false"),

@@ -952,19 +952,23 @@ export_mail_env() {
     export STALWART_HTTP_PERMISSIVE_CORS STALWART_DEFAULT_DOMAIN
     export STALWART_DNS_RESOLVER STALWART_DNS_USE_TLS
     export HOMELAB_DNS_SERVERS HOMELAB_DOCKER_DNS_SERVERS BULWARK_JMAP_SERVER_URL
-    export EMAIL_PROVIDER SMTP_HOST SMTP_PORT SMTP_USER SMTP_PASS DEFAULT_FROM ALLOWED_DOMAINS
+    export SETTINGS_ENCRYPTION_KEY ALLOWED_DOMAINS
 
     export EMAIL_POSTGRES_USER="${EMAIL_POSTGRES_USER:-email_service}"
     export EMAIL_POSTGRES_PASSWORD="${EMAIL_POSTGRES_PASSWORD:-$(secret_file "$SECRETS_DIR/email-postgres-password" 32)}"
     export EMAIL_POSTGRES_DB="${EMAIL_POSTGRES_DB:-email_service}"
     export EMAIL_JWT_SECRET="${EMAIL_JWT_SECRET:-$(secret_file "$SECRETS_DIR/email-jwt-secret" 64)}"
+    if [[ ! -s "$SECRETS_DIR/email-settings-encryption-key" ]]; then
+        openssl rand -base64 32 > "$SECRETS_DIR/email-settings-encryption-key"
+        chmod 600 "$SECRETS_DIR/email-settings-encryption-key"
+    fi
+    export SETTINGS_ENCRYPTION_KEY="${SETTINGS_ENCRYPTION_KEY:-$(cat "$SECRETS_DIR/email-settings-encryption-key")}"
     if [[ ! -s "$SECRETS_DIR/email-inbound-config-encryption-key" ]]; then
         openssl rand -base64 32 > "$SECRETS_DIR/email-inbound-config-encryption-key"
         chmod 600 "$SECRETS_DIR/email-inbound-config-encryption-key"
     fi
     export INBOUND_CONFIG_ENCRYPTION_KEY="${INBOUND_CONFIG_ENCRYPTION_KEY:-$(cat "$SECRETS_DIR/email-inbound-config-encryption-key")}"
     export DASHBOARD_ADMIN_EMAILS="${DASHBOARD_ADMIN_EMAILS:-allan.bosire@ifkafin.com}"
-    export POSTAL_SERVER_API_KEY="${POSTAL_SERVER_API_KEY:-$(secret_file "$SECRETS_DIR/postal-server-api-key" 48)}"
     export LISTMONK_PASSWORD="${LISTMONK_PASSWORD:-$(secret_file "$SECRETS_DIR/listmonk-api-password" 32)}"
     export POSTAL_DB_ROOT_PASSWORD="${POSTAL_DB_ROOT_PASSWORD:-$(secret_file "$SECRETS_DIR/postal-db-root-password" 32)}"
     export POSTAL_RAILS_SECRET_KEY="${POSTAL_RAILS_SECRET_KEY:-$(secret_file "$SECRETS_DIR/postal-rails-secret-key" 64)}"
@@ -1005,12 +1009,11 @@ install_mail_lxc() {
     pct push "$ctid" "$GENERATED_DIR/mail/scripts/stalwart-homelab/init.py" /opt/email-service/scripts/stalwart-homelab/init.py
     pct push "$ctid" "$GENERATED_DIR/mail/scripts/stalwart-homelab/apply-inside.sh" /opt/email-service/scripts/stalwart-homelab/apply-inside.sh
     pct push "$ctid" "$SERVICES_DIR/mail/apply-stalwart-plan.sh" /opt/email-service/apply-stalwart-plan.sh
-    pct push "$ctid" "$SERVICES_DIR/mail/update-smtp-credentials.sh" /opt/email-service/update-smtp-credentials.sh
     pct push "$ctid" "$SERVICES_DIR/mail/regenerate-stalwart-config.sh" /opt/email-service/regenerate-stalwart-config.sh
     pct_exec "$ctid" "mkdir -p /opt/email-service/scripts/homelab-app"
     pct push "$ctid" "$SERVICES_DIR/mail/patch-allowed-domains.sh" /opt/email-service/scripts/homelab-app/patch-allowed-domains.sh
     pct push "$ctid" "$SERVICES_DIR/mail/app-entrypoint.sh" /opt/email-service/scripts/homelab-app/app-entrypoint.sh
-    pct_exec "$ctid" "chmod 600 /opt/email-service/.env && chmod +x /opt/email-service/apply-stalwart-plan.sh /opt/email-service/update-smtp-credentials.sh /opt/email-service/regenerate-stalwart-config.sh /opt/email-service/scripts/stalwart-homelab/apply-inside.sh /opt/email-service/scripts/homelab-app/patch-allowed-domains.sh /opt/email-service/scripts/homelab-app/app-entrypoint.sh"
+    pct_exec "$ctid" "chmod 600 /opt/email-service/.env && chmod +x /opt/email-service/apply-stalwart-plan.sh /opt/email-service/regenerate-stalwart-config.sh /opt/email-service/scripts/stalwart-homelab/apply-inside.sh /opt/email-service/scripts/homelab-app/patch-allowed-domains.sh /opt/email-service/scripts/homelab-app/app-entrypoint.sh"
 
     info "Freeing mail ports inside LXC $ctid before starting email-service"
     free_mail_ports_in_lxc "$ctid"

@@ -16,6 +16,33 @@ if [[ -z "$DOMAIN" ]]; then
     error "Set SERVER_HOST to your base domain before provisioning service LXCs."
 fi
 
+secret_file() {
+    local file="$1"
+    local length="${2:-32}"
+    if [[ ! -s "$file" ]]; then
+        random_token "$length" > "$file"
+        chmod 600 "$file"
+    fi
+    cat "$file"
+}
+
+strong_secret_file() {
+    local file="$1"
+    local length="${2:-24}"
+    local value
+
+    if [[ -s "$file" ]]; then
+        value="$(cat "$file")"
+    fi
+
+    if [[ ! "${value:-}" =~ [A-Z] || ! "${value:-}" =~ [a-z] || ! "${value:-}" =~ [0-9] || ! "${value:-}" =~ [^a-zA-Z0-9] || ${#value} -lt 10 || ${#value} -gt 72 ]]; then
+        value="A1!$(random_token "$((length - 3))")"
+        printf '%s\n' "$value" > "$file"
+        chmod 600 "$file"
+    fi
+    cat "$file"
+}
+
 VM_BRIDGE="${HOMELAB_BRIDGE:-vmbr10}"
 NETWORK_PREFIX="${HOMELAB_NETWORK_PREFIX:-10.10.10}"
 GATEWAY_IP="${HOMELAB_GATEWAY_IP:-$NETWORK_PREFIX.1}"
@@ -310,33 +337,6 @@ ensure_host_genisoimage() {
 
 random_token() {
     openssl rand -hex "$(((${1:-32} + 1) / 2))" | cut -c "1-${1:-32}"
-}
-
-secret_file() {
-    local file="$1"
-    local length="${2:-32}"
-    if [[ ! -s "$file" ]]; then
-        random_token "$length" > "$file"
-        chmod 600 "$file"
-    fi
-    cat "$file"
-}
-
-strong_secret_file() {
-    local file="$1"
-    local length="${2:-24}"
-    local value
-
-    if [[ -s "$file" ]]; then
-        value="$(cat "$file")"
-    fi
-
-    if [[ ! "${value:-}" =~ [A-Z] || ! "${value:-}" =~ [a-z] || ! "${value:-}" =~ [0-9] || ! "${value:-}" =~ [^a-zA-Z0-9] || ${#value} -lt 10 || ${#value} -gt 72 ]]; then
-        value="A1!$(random_token "$((length - 3))")"
-        printf '%s\n' "$value" > "$file"
-        chmod 600 "$file"
-    fi
-    cat "$file"
 }
 
 ensure_ssh_keypair() {

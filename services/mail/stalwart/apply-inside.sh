@@ -9,6 +9,7 @@ CLI=/root/.cargo/bin/stalwart-cli
 URL=http://stalwart:8080
 domain="${STALWART_DEFAULT_DOMAIN:?STALWART_DEFAULT_DOMAIN is required}"
 hostname="${STALWART_HOSTNAME:?STALWART_HOSTNAME is required}"
+allowed_ip="${STALWART_ALLOWED_IP:-}"
 plan_in="${PLAN_FILE:-/plan.ndjson}"
 
 cli() {
@@ -31,6 +32,19 @@ fi
 if [ -z "${domain_id}" ] || [ "${domain_id}" = "null" ]; then
   echo "error: failed to resolve Stalwart Domain id for ${domain}" >&2
   exit 1
+fi
+
+if [ -n "$allowed_ip" ]; then
+  allowed_ip_id="$(
+    cli query AllowedIp --where "address=${allowed_ip}" --fields id,address --json 2>/dev/null \
+      | jq -r 'if type == "array" then (.[0].id // empty) else (.id // empty) end'
+  )"
+  if [ -z "$allowed_ip_id" ] || [ "$allowed_ip_id" = "null" ]; then
+    cli create AllowedIp --json "$(
+      jq -nc --arg address "$allowed_ip" \
+        '{address:$address, reason:"Trusted homelab reverse proxy"}'
+    )" >/dev/null
+  fi
 fi
 
 rewritten="$(mktemp)"

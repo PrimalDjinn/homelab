@@ -728,7 +728,12 @@ ensure_template() {
     [[ -n "$storage" ]] || error "No Proxmox storage with vztmpl content found."
 
     pveam update >&2
-    template="$(pveam available --section system | awk '/debian-13-standard/ { print $2 }' | sort -V | tail -n1)"
+    template="$(
+      pveam available --section system |
+      awk '$1 == "system" && $2 ~ /^debian-13-standard_/ && $3 == "amd64" { print $2 }' |
+      sort -V |
+      tail -n1
+    )"
     [[ -n "$template" ]] || error "Could not find a Debian 13 LXC template."
 
     if ! pveam list "$storage" | awk '{ print $1 }' | grep -q "/$template$"; then

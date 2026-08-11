@@ -33,7 +33,7 @@ oidc:
   enabled: true
   issuer: "${HEADSCALE_OIDC_ISSUER}"
   headscale_api_key: "${HEADSCALE_API_KEY}"
-  client_id: "headscale"
+  client_id: "${HEADSCALE_OIDC_CLIENT_ID}"
   client_secret: "${HEADSCALE_OIDC_CLIENT_SECRET}"
   use_pkce: true
   disable_api_key_login: false

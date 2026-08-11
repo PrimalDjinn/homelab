@@ -84,6 +84,7 @@ def apply_plan():
             "@type": "update",
             "object": "Http",
             "value": {
+                "useXForwarded": env_bool("STALWART_HTTP_USE_X_FORWARDED", True),
                 "usePermissiveCors": env_bool("STALWART_HTTP_PERMISSIVE_CORS", False),
                 "responseHeaders": http_headers,
             },

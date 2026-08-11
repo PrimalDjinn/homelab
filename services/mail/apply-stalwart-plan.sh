@@ -32,6 +32,7 @@ docker run --rm \
   --network "$network" \
   -e STALWART_ADMIN_USER \
   -e STALWART_ADMIN_PASSWORD \
+  -e STALWART_ALLOWED_IP \
   -e STALWART_HOSTNAME="$hostname" \
   -e STALWART_DEFAULT_DOMAIN="$domain" \
   -e PLAN_FILE=/plan.ndjson \

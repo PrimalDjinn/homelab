@@ -51,13 +51,13 @@ unix_socket_permission: "0770"
 oidc:
   only_start_if_oidc_is_available: false
   issuer: "${HEADSCALE_OIDC_ISSUER}"
-  client_id: "headscale"
+  client_id: "${HEADSCALE_OIDC_CLIENT_ID}"
   client_secret: "${HEADSCALE_OIDC_CLIENT_SECRET}"
   expiry: 180d
   scope: ["openid", "profile", "email", "groups"]
   email_verified_required: false
   allowed_groups:
-    - headscale
+    - "${HEADSCALE_OIDC_ALLOWED_GROUP}"
   pkce:
     enabled: true
     method: S256

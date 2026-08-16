@@ -47,6 +47,24 @@ if [ -n "$allowed_ip" ]; then
   fi
 fi
 
+submission_id="$(
+  cli query NetworkListener --where "name=submission" --fields id,name --json 2>/dev/null \
+    | jq -r 'if type == "array" then (.[0].id // empty) else (.id // empty) end'
+)"
+
+if [ -z "$submission_id" ] || [ "$submission_id" = "null" ]; then
+  cli create NetworkListener --json '{
+    "name":"submission",
+    "bind":{"[::]:587":true},
+    "protocol":"smtp",
+    "useTls":true,
+    "tlsImplicit":false,
+    "overrideProxyTrustedNetworks":{},
+    "tlsDisableCipherSuites":{},
+    "tlsDisableProtocols":{}
+  }' >/dev/null
+fi
+
 rewritten="$(mktemp)"
 trap 'rm -f "$rewritten"' EXIT
 

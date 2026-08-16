@@ -41,7 +41,8 @@ The apply helper intentionally filters out destructive or bootstrap-only plan
 objects (`Bootstrap`, `AcmeProvider`, and `NetworkListener`) if they appear in an
 older generated plan. Listener, bootstrap, or ACME provider migrations should be
 handled explicitly instead of rerunning a full destroy/create plan against an
-existing Stalwart datastore.
+existing Stalwart datastore. As an explicit safe migration, the helper creates
+the SMTP `submission` listener on port `587` when it is missing.
 
 Public mail DNS should include:
 

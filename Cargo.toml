@@ -4,5 +4,8 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+colog = "1.4.0"
 log = "0.4.34"
+regex = "1.13.1"
+reqwest = { version = "0.13.5", features = ["blocking"] }
 thiserror = "2.0.21"

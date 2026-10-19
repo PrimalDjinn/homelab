@@ -1,7 +1,7 @@
 use std::{
     fs::File,
     io::{BufRead, BufReader},
-    net::{Ipv4Addr},
+    net::Ipv4Addr,
     path::PathBuf,
     process::Command,
 };
@@ -61,7 +61,7 @@ pub fn get_internet_ip() -> Result<Ipv4Addr, String> {
         match reqwest::blocking::Client::new().get(candidate).send() {
             Ok(response) => match response.text() {
                 Ok(text) => {
-                    let ip = text.parse::<Ipv4Addr>();
+                    let ip = text.trim().parse::<Ipv4Addr>();
 
                     match ip {
                         Ok(addr) => return Ok(addr),
@@ -107,10 +107,7 @@ pub fn get_host_ipv4() -> Result<Ipv4Addr, String> {
                 log::info!("Found the host IP: {ip}");
 
                 let addr = match ip.parse::<Ipv4Addr>() {
-                    Ok(addr) => {
-                        log::info!("Ip candidate returned Successfully: {addr}");
-                        addr
-                    },
+                    Ok(addr) => addr,
                     Err(e) => {
                         log::warn!("Encountered a malformed ip address, {e}");
                         Ipv4Addr::UNSPECIFIED

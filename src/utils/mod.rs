@@ -107,7 +107,10 @@ pub fn get_host_ipv4() -> Result<Ipv4Addr, String> {
                 log::info!("Found the host IP: {ip}");
 
                 let addr = match ip.parse::<Ipv4Addr>() {
-                    Ok(addr) => addr,
+                    Ok(addr) => {
+                        log::info!("Ip candidate returned Successfully: {addr}");
+                        addr
+                    },
                     Err(e) => {
                         log::warn!("Encountered a malformed ip address, {e}");
                         Ipv4Addr::UNSPECIFIED

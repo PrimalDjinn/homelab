@@ -983,7 +983,7 @@ export_mail_env() {
     export STALWART_ADMIN_PASSWORD="${STALWART_ADMIN_PASSWORD:-$(secret_file "$SECRETS_DIR/stalwart-admin-password" 24)}"
     export STALWART_DB_PASSWORD="${STALWART_DB_PASSWORD:-$(secret_file "$SECRETS_DIR/stalwart-db-password" 32)}"
     export STALWART_REDIS_PASSWORD="${STALWART_REDIS_PASSWORD:-$(secret_file "$SECRETS_DIR/stalwart-redis-password" 32)}"
-    export STALWART_MINIO_ROOT_PASSWORD="${STALWART_MINIO_ROOT_PASSWORD:-$(secret_file "$SECRETS_DIR/stalwart-minio-root-password" 32)}"
+    export GARAGE_IMAGE GARAGE_CAPACITY_BYTES STALWART_S3_BUCKET STALWART_S3_REGION STALWART_UID
     export BULWARK_SESSION_SECRET="${BULWARK_SESSION_SECRET:-$(secret_file "$SECRETS_DIR/bulwark-session-secret" 64)}"
     export LIBREDESK_SYSTEM_USER_PASSWORD="${LIBREDESK_SYSTEM_USER_PASSWORD:-$(strong_secret_file "$SECRETS_DIR/libredesk-system-user-password" 24)}"
     export LIBREDESK_DB__PASSWORD="${LIBREDESK_DB__PASSWORD:-$(secret_file "$SECRETS_DIR/libredesk-db-password" 32)}"
@@ -1013,6 +1013,7 @@ install_mail_lxc() {
     pct push "$ctid" "$GENERATED_DIR/mail/docker-compose.homelab.yml" /opt/email-service/docker-compose.homelab.yml
     pct_exec "$ctid" "mkdir -p /opt/email-service/scripts/stalwart-homelab"
     pct push "$ctid" "$GENERATED_DIR/mail/scripts/stalwart-homelab/init.py" /opt/email-service/scripts/stalwart-homelab/init.py
+    pct push "$ctid" "$GENERATED_DIR/mail/scripts/stalwart-homelab/bootstrap.py" /opt/email-service/scripts/stalwart-homelab/bootstrap.py
     pct push "$ctid" "$GENERATED_DIR/mail/scripts/stalwart-homelab/apply-inside.sh" /opt/email-service/scripts/stalwart-homelab/apply-inside.sh
     pct push "$ctid" "$SERVICES_DIR/mail/apply-stalwart-plan.sh" /opt/email-service/apply-stalwart-plan.sh
     pct push "$ctid" "$SERVICES_DIR/mail/regenerate-stalwart-config.sh" /opt/email-service/regenerate-stalwart-config.sh
@@ -1025,10 +1026,15 @@ install_mail_lxc() {
     free_mail_ports_in_lxc "$ctid"
 
     info "Regenerating Stalwart config in LXC $ctid"
-    pct_exec "$ctid" "cd /opt/email-service && docker compose -f ./docker-compose.prod.yml -f ./docker-compose.homelab.yml --env-file .env up --force-recreate stalwart-config"
+    pct_exec "$ctid" "cd /opt/email-service && docker compose -f ./docker-compose.prod.yml -f ./docker-compose.homelab.yml --env-file .env run --rm stalwart-config"
 
     info "Starting email-service production stack in LXC $ctid"
-    pct_exec "$ctid" "cd /opt/email-service && docker compose -f ./docker-compose.prod.yml -f ./docker-compose.homelab.yml --env-file .env up -d && docker compose -f ./docker-compose.prod.yml -f ./docker-compose.homelab.yml --env-file .env up -d --force-recreate stalwart"
+    pct_exec "$ctid" "cd /opt/email-service && docker compose -f ./docker-compose.prod.yml -f ./docker-compose.homelab.yml --env-file .env up -d && docker compose -f ./docker-compose.prod.yml -f ./docker-compose.homelab.yml --env-file .env up -d --wait --force-recreate stalwart"
+
+    if [[ "${STALWART_BOOTSTRAP_NEW_INSTALL:-false}" == "true" ]]; then
+        info "Explicitly initializing the new Stalwart store in LXC $ctid"
+        pct_exec "$ctid" "cd /opt/email-service && docker compose -f ./docker-compose.prod.yml -f ./docker-compose.homelab.yml --env-file .env run --rm --no-deps stalwart-config python /scripts/bootstrap.py --new-install && docker compose -f ./docker-compose.prod.yml -f ./docker-compose.homelab.yml --env-file .env restart stalwart"
+    fi
 
     info "Applying Stalwart declarative configuration in LXC $ctid"
     pct_exec "$ctid" "cd /opt/email-service && ./apply-stalwart-plan.sh"

@@ -58,7 +58,7 @@ if [ -z "$submission_id" ] || [ "$submission_id" = "null" ]; then
     "bind":{"[::]:587":true},
     "protocol":"smtp",
     "useTls":true,
-    "tlsImplicit":false,
+    "implicitTls":false,
     "overrideProxyTrustedNetworks":{},
     "tlsDisableCipherSuites":{},
     "tlsDisableProtocols":{}
@@ -97,3 +97,6 @@ rm -f "$rewritten"
 trap - EXIT
 
 cli apply --file "$plan_in"
+
+# Saving singleton settings does not activate them until a reload.
+cli create Action/ReloadSettings --json '{}'

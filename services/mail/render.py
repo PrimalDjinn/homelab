@@ -45,7 +45,7 @@ def write_env(path: Path) -> None:
     # Mailbox/address domain (e.g. heylomeet.com), not the mail server hostname.
     email_domain = hostname(env("STALWART_DEFAULT_DOMAIN") or strip_mail_prefix(mail_domain) or strip_mail_prefix(domain))
     _ = env("EMAIL_APP_DOMAIN", f"email.{domain}")
-    webmail_domain = env("WEBMAIL_DOMAIN", f"webmail.{domain}")
+    webmail_domain = hostname(env("WEBMAIL_DOMAIN", f"webmail.{domain}"))
     _ = env("LISTMONK_DOMAIN", f"listmonk.{domain}")
     postal_domain = env("POSTAL_DOMAIN", f"postal.{domain}")
     _ = env("LIBREDESK_DOMAIN", f"libredesk.{domain}")
@@ -100,6 +100,7 @@ def write_env(path: Path) -> None:
         "LISTMONK_TIMEZONE": env("LISTMONK_TIMEZONE", "Etc/UTC"),
         "STALWART_IMAGE": env("STALWART_IMAGE", "stalwartlabs/stalwart:latest"),
         "STALWART_HOSTNAME": mail_domain,
+        "STALWART_PUBLIC_URL": f"https://{mail_domain}",
         "STALWART_DEFAULT_DOMAIN": email_domain,
         "STALWART_AUTODISCOVER_HOSTNAME": autodiscover_domain,
         "STALWART_AUTOCONFIG_HOSTNAME": autoconfig_domain,
@@ -149,10 +150,14 @@ def write_env(path: Path) -> None:
         "STALWART_DB_PASSWORD": env("STALWART_DB_PASSWORD"),
         "STALWART_DB_NAME": env("STALWART_DB_NAME", "stalwart"),
         "STALWART_REDIS_PASSWORD": env("STALWART_REDIS_PASSWORD"),
-        "STALWART_MINIO_ROOT_USER": env("STALWART_MINIO_ROOT_USER", "stalwart"),
-        "STALWART_MINIO_ROOT_PASSWORD": env("STALWART_MINIO_ROOT_PASSWORD"),
-        "STALWART_MINIO_BUCKET": env("STALWART_MINIO_BUCKET", "stalwart"),
-        "STALWART_MINIO_REGION": env("STALWART_MINIO_REGION", "us-east-1"),
+        "GARAGE_IMAGE": env("GARAGE_IMAGE", "dxflrs/garage:v2.5.0"),
+        "GARAGE_CAPACITY_BYTES": env("GARAGE_CAPACITY_BYTES"),
+        "STALWART_S3_BUCKET": env("STALWART_S3_BUCKET", "stalwart"),
+        "STALWART_S3_REGION": env("STALWART_S3_REGION", "garage"),
+        "STALWART_S3_ENDPOINT": "http://stalwart-garage:3900",
+        "STALWART_S3_ACCESS_KEY_FILE": "/etc/stalwart-s3/access-key",
+        "STALWART_S3_SECRET_KEY_FILE": "/etc/stalwart-s3/secret-key",
+        "STALWART_UID": env("STALWART_UID", "2000"),
         "BULWARK_IMAGE": env("BULWARK_IMAGE", "ghcr.io/bulwarkmail/webmail:latest"),
         "BULWARK_HOSTNAME": "0.0.0.0",
         "BULWARK_PORT": "3000",

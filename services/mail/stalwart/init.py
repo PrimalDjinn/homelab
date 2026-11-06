@@ -2,6 +2,7 @@
 import json
 import os
 from pathlib import Path
+from urllib.parse import quote
 
 
 CONFIG_DIR = Path(os.environ.get("STALWART_CONFIG_DIR", "/etc/stalwart"))
@@ -53,7 +54,7 @@ def dns_resolver():
     value = {
         "@type": resolver_type,
         "attempts": int(env("STALWART_DNS_ATTEMPTS", "2")),
-        "concurrency": int(env("STALWART_DNS_CONCURRENCY", "2")),
+        "maxConcurrentRequests": int(env("STALWART_DNS_CONCURRENCY", "2")),
         "enableEdns": env_bool("STALWART_DNS_ENABLE_EDNS", True),
         "preserveIntermediates": env_bool("STALWART_DNS_PRESERVE_INTERMEDIATES", True),
         "tcpOnError": env_bool("STALWART_DNS_TCP_ON_ERROR", True),
@@ -68,11 +69,13 @@ def apply_plan():
     domain = env("STALWART_DEFAULT_DOMAIN", default_domain(hostname))
     http_headers = {}
     origins = csv("STALWART_HTTP_CORS_ALLOWED_ORIGINS")
+    if len(origins) > 1 or "*" in origins:
+        raise ValueError("Configure one explicit CORS origin, or use STALWART_HTTP_PERMISSIVE_CORS")
     if origins:
         http_headers.update(
             {
                 "Access-Control-Allow-Origin": origins[0],
-                "Access-Control-Allow-Methods": "GET, POST, OPTIONS, DELETE, PUT",
+                "Access-Control-Allow-Methods": "POST, GET, PATCH, PUT, DELETE, HEAD, OPTIONS",
                 "Access-Control-Allow-Headers": "Content-Type, Authorization, Accept, X-Requested-With",
                 "Access-Control-Allow-Credentials": "true",
             }
@@ -84,7 +87,8 @@ def apply_plan():
             "@type": "update",
             "object": "Http",
             "value": {
-                "useXForwarded": env_bool("STALWART_HTTP_USE_X_FORWARDED", True),
+                "clientIpSource": "xForwardedFor" if env_bool("STALWART_HTTP_USE_X_FORWARDED", True) else "peer",
+                "forwardedHops": 1,
                 "usePermissiveCors": env_bool("STALWART_HTTP_PERMISSIVE_CORS", False),
                 "responseHeaders": http_headers,
             },
@@ -116,12 +120,36 @@ def apply_plan():
 
 def main():
     CONFIG_DIR.mkdir(parents=True, exist_ok=True)
-    (CONFIG_DIR / "bootstrap.json").unlink(missing_ok=True)
-    (CONFIG_DIR / "config.json").write_text(json.dumps(datastore(), indent=2) + "\n")
+    # This is an explicit first-install input; never apply it over a populated store.
+    hostname = env("STALWART_HOSTNAME", "mail.example.com")
+    bootstrap = {
+        "defaultHostname": hostname,
+        "defaultDomain": env("STALWART_DEFAULT_DOMAIN", default_domain(hostname)),
+        "requestTlsCertificate": env_bool("STALWART_ACME_ENABLED", False),
+        "generateDkimKeys": True,
+        "dataStore": datastore(),
+        "blobStore": {
+            "@type": "S3",
+            "bucket": env("STALWART_S3_BUCKET", "stalwart"),
+            "region": {"@type": "Custom", "region": env("STALWART_S3_REGION", "garage"), "url": env("STALWART_S3_ENDPOINT", "http://stalwart-garage:3900")},
+            "accessKeyId": {"@type": "Value", "value": Path(env("STALWART_S3_ACCESS_KEY_FILE", "/etc/stalwart-s3/access-key")).read_text().strip()},
+            "secretKey": {"@type": "File", "filePath": env("STALWART_S3_SECRET_KEY_FILE", "/etc/stalwart-s3/secret-key")},
+            "keyPrefix": "stalwart/",
+        },
+        "searchStore": {"@type": "Default"},
+        "inMemoryStore": {"@type": "Redis", "url": f"redis://:{quote(env('STALWART_REDIS_PASSWORD', 'stalwart'), safe='')}@stalwart-redis:6379/0"},
+        "directory": {"@type": "Internal"},
+        "dnsServer": {"@type": "Manual"},
+    }
+    (CONFIG_DIR / "bootstrap.json").write_text(json.dumps(bootstrap, indent=2) + "\n")
+    (CONFIG_DIR / "bootstrap.json").chmod(0o600)
+    (CONFIG_DIR / "datastore.json").write_text(json.dumps(datastore(), indent=2) + "\n")
     (CONFIG_DIR / "apply-plan.ndjson").write_text(
         "\n".join(json.dumps(item, separators=(",", ":")) for item in apply_plan()) + "\n"
     )
-    print(f"Wrote Stalwart config and apply plan to {CONFIG_DIR}")
+    # Keep an existing live datastore pointer; a fresh install must enter bootstrap.
+    os.chown(CONFIG_DIR, int(env("STALWART_UID", "2000")), int(env("STALWART_UID", "2000")))
+    print(f"Wrote Stalwart datastore template, bootstrap input and apply plan to {CONFIG_DIR}")
 
 
 if __name__ == "__main__":

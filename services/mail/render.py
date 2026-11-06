@@ -151,7 +151,7 @@ def write_env(path: Path) -> None:
         "STALWART_DB_NAME": env("STALWART_DB_NAME", "stalwart"),
         "STALWART_REDIS_PASSWORD": env("STALWART_REDIS_PASSWORD"),
         "GARAGE_IMAGE": env("GARAGE_IMAGE", "dxflrs/garage:v2.5.0"),
-        "GARAGE_CAPACITY_BYTES": env("GARAGE_CAPACITY_BYTES", "10000000000"),
+        "GARAGE_CAPACITY_BYTES": env("GARAGE_CAPACITY_BYTES"),
         "STALWART_S3_BUCKET": env("STALWART_S3_BUCKET", "stalwart"),
         "STALWART_S3_REGION": env("STALWART_S3_REGION", "garage"),
         "STALWART_S3_ENDPOINT": "http://stalwart-garage:3900",

@@ -16,14 +16,15 @@ The Proxmox host forwards public mail protocol ports directly to the mail LXC:
 
 - `25`, `587`, `465`, `143`, `993`, `110`, `995`, `4190`
 
-Stalwart DNS-01 ACME uses `STALWART_ACME_DNS_CF_SECRET` when set. If it is
-blank, the generated email-service `.env` falls back to
-`CLOUDFLARE_DNS_API_TOKEN`.
+The renderer retains the Cloudflare token variables for manual DNS-01 setup.
+Configure the DNS and ACME providers in Stalwart’s WebUI; rendering an environment
+variable does not configure a database-backed provider.
 
 The homelab override uses the current Stalwart startup model. A Python generator
 ports the ChibaLLC Stalwart env surface into current Stalwart artifacts:
 
-- `/etc/stalwart/config.json`: the startup datastore pointer.
+- `/etc/stalwart/datastore.json`: a template for the startup datastore pointer.
+- `/etc/stalwart/bootstrap.json`: explicit new-install input including Garage.
 - `/etc/stalwart/apply-plan.ndjson`: declarative CLI operations for DB-backed
   Stalwart settings. `SystemSettings.defaultDomainId` is required by current
   Stalwart releases; `apply-stalwart-plan.sh` ensures the
@@ -89,18 +90,66 @@ If that returns `Connection reset by peer` while other LXCs (e.g.
 `homelab-auth` at `10.10.10.20`) can reach `10.10.10.40:8080` fine,
 Stalwart has likely banned or rate-limited the proxy IP (`10.10.10.10`).
 
-**Fix:** Open the Stalwart admin panel (`http://localhost:8080/admin` inside
-the mail LXC, or via an SSH tunnel), go to **Settings → Security → Trusted
-IPs** (or **Access Control**), and add the homelab subnet:
+**Fix:** Configure `STALWART_ALLOWED_IP` as the exact proxy LXC address (for
+example `10.10.10.10`) and run `apply-stalwart-plan.sh`. Its AllowedIp entry and
+settings reload prevent that proxy from being blocked. If diagnosing in the
+WebUI, use its public HTTPS URL; a normal installation does not accept WebUI
+sign-in over plain HTTP. Do not allow the whole subnet unnecessarily.
 
-- `10.10.10.0/24`
+## Garage and current Stalwart scripts
 
-Alternatively, whitelist the individual proxy IP:
+Use the accompanying `email-service` Garage/Bulwark update before deploying this
+version of homelab. The rendered environment now uses `GARAGE_IMAGE`,
+`GARAGE_CAPACITY_BYTES`, `STALWART_S3_BUCKET` and `STALWART_S3_REGION`. Upstream
+initializes Garage and persists a bucket-scoped key in `stalwart_s3_credentials`;
+Stalwart reads its secret from `/etc/stalwart-s3/secret-key`. This is not an
+in-place MinIO migration: follow upstream's migration guide and keep the old
+store and its credential available until all objects are copied and verified.
 
-- `10.10.10.10`
+For a **new empty installation**, set `STALWART_BOOTSTRAP_NEW_INSTALL=true` before
+running the installer. It submits the generated bootstrap input through the
+management API, restarts Stalwart, and applies normal settings. Set the flag back
+to `false` afterwards. Existing installations must leave it disabled. Bootstrap
+is never part of `regenerate-stalwart-config.sh`.
 
-Save the change; it applies immediately without a restart.
+The generator writes `datastore.json` as a template and leaves `config.json`
+untouched. This lets a new installation enter bootstrap mode; Stalwart writes
+its live datastore pointer only after setup succeeds. Never delete an existing
+`config.json` to force setup. Restore a missing pointer from a backup or the
+reviewed datastore template instead.
 
-**Note:** This should eventually be auto-configured by the homelab setup so
-Stalwart pre-trusts the whole LXC network. Until then, document the subnet
-above and add the proxy host IP explicitly after any incident.
+`MAIL_DOMAIN` controls the server's public hostname, while
+`STALWART_DEFAULT_DOMAIN` controls mailbox addresses. For example:
+
+```dotenv
+MAIL_DOMAIN="mail.ifkafin.com"
+STALWART_DEFAULT_DOMAIN="heylomeet.com"
+WEBMAIL_DOMAIN="webmail.ifkafin.com"
+BULWARK_JMAP_SERVER_URL="https://mail.ifkafin.com"
+```
+
+The container and `SystemSettings.defaultHostname` use the public hostname.
+The apply helper resolves a real domain ID, applies HTTP settings using the 1.0
+`clientIpSource` field, and runs `ReloadSettings`. CORS allows the rendered HTTPS
+webmail origin and Authorization preflights. File regeneration alone does not
+activate these settings. The helper's submission listener uses `implicitTls`,
+not the obsolete `tlsImplicit` field.
+
+The ordinary admin URL is `https://<mail-host>/admin`. HTTP port 8080 is suitable
+for first bootstrap or proxy upstream traffic, not normal browser login.
+Recovery mode stops mail service and is not a permanent access solution.
+
+After deployment, verify from a browser and with a preflight:
+
+```sh
+curl -i -X OPTIONS https://mail.ifkafin.com/jmap/session \
+  -H 'Origin: https://webmail.ifkafin.com' \
+  -H 'Access-Control-Request-Method: GET' \
+  -H 'Access-Control-Request-Headers: authorization,content-type'
+```
+
+Run the renderer regression tests with:
+
+```sh
+python3 -m unittest discover -s tests -v
+```
